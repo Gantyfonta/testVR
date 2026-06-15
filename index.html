@@ -12,7 +12,197 @@
       AFRAME.registerComponent('wand-handler', {
         init: function () {
           this.startPos = new THREE.Vector3();
-          this.endPos = new THREE.Vector3();
+          this.endPos = new THREE.Vector3();<!DOCTYPE html>
+<html>
+  <head>
+    <title>VR Web Minecraft</title>
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.1.0/dist/aframe-extras.min.js"></script>
+
+    <script>
+      // BLOCK TYPES DEFINITION
+      const BLOCK_TYPES = [
+        { id: 'grass', color: '#557a46', name: '🌿 Grass' },
+        { id: 'dirt',  color: '#8b5a2b', name: '🟫 Dirt' },
+        { id: 'stone', color: '#808080', name: '🪨 Stone' }
+      ];
+
+      // CORE WORLD MANAGER (Handles generation, building, destroying, and saving)
+      AFRAME.registerComponent('world-manager', {
+        init: function () {
+          this.worldData = {}; // Format: "x,y,z": "blockTypeIndex"
+          this.selectedBlockIndex = 0;
+          this.hudText = document.querySelector('#hud-text');
+
+          // Try to load world from LocalStorage
+          const savedWorld = localStorage.getItem('vr_minecraft_save');
+          if (savedWorld) {
+            this.worldData = JSON.parse(savedWorld);
+            this.renderWorld();
+          } else {
+            this.generateFlatWorld();
+          }
+          
+          this.updateHUD();
+
+          // Listen for block selection change from controller
+          this.el.addEventListener('cycle-block', () => {
+            this.selectedBlockIndex = (this.selectedBlockIndex + 1) % BLOCK_TYPES.length;
+            this.updateHUD();
+          });
+        },
+
+        generateFlatWorld: function() {
+          // Generate a simple 10x10 flat landscape of two block layers
+          for (let x = -5; x <= 5; x++) {
+            for (let z = -5; z <= -15; z++) {
+              this.worldData[`${x},-1,${z}`] = 1; // Layer -1: Dirt
+              this.worldData[`${x},0,${z}`] = 0;  // Layer 0: Grass
+            }
+          }
+          this.renderWorld();
+          this.saveWorld();
+        },
+
+        renderWorld: function() {
+          // Clear any current rendered blocks
+          const existingBlocks = document.querySelectorAll('.voxel');
+          existingBlocks.forEach(b => b.parentNode.removeChild(b));
+
+          // Spawn entities based on world state dictionary
+          Object.keys(this.worldData).forEach(key => {
+            const [x, y, z] = key.split(',').map(Number);
+            const blockTypeIdx = this.worldData[key];
+            this.spawnBlockEntity(x, y, z, blockTypeIdx);
+          });
+        },
+
+        spawnBlockEntity: function(x, y, z, typeIdx) {
+          const blockInfo = BLOCK_TYPES[typeIdx];
+          if (!blockInfo) return;
+
+          let box = document.createElement('a-box');
+          box.setAttribute('class', 'voxel');
+          box.setAttribute('position', `${x} ${y} ${z}`);
+          box.setAttribute('width', '1');
+          box.setAttribute('height', '1');
+          box.setAttribute('depth', '1');
+          box.setAttribute('material', `color: ${blockInfo.color}; roughness: 0.9;`);
+          // Store raw grid position metadata on the element
+          box.dataset.gridPos = `${x},${y},${z}`;
+
+          this.el.appendChild(box);
+        },
+
+        addBlockAtIntersection: function(intersection) {
+          // Calculate target adjacent grid position based on face normal vector
+          const currentBlockPos = intersection.el.object3D.position;
+          const normal = intersection.face.normal;
+
+          const newX = Math.round(currentBlockPos.x + normal.x);
+          const newY = Math.round(currentBlockPos.y + normal.y);
+          const newZ = Math.round(currentBlockPos.z + normal.z);
+          const newKey = `${newX},${newY},${newZ}`;
+
+          // Only build if space is unoccupied
+          if (this.worldData[newKey] === undefined) {
+            this.worldData[newKey] = this.selectedBlockIndex;
+            this.spawnBlockEntity(newX, newY, newZ, this.selectedBlockIndex);
+            this.saveWorld();
+          }
+        },
+
+        removeBlockEntity: function(blockEl) {
+          const key = blockEl.dataset.gridPos;
+          if (key && this.worldData[key] !== undefined) {
+            delete this.worldData[key];
+            blockEl.parentNode.removeChild(blockEl);
+            this.saveWorld();
+          }
+        },
+
+        saveWorld: function() {
+          localStorage.setItem('vr_minecraft_save', JSON.stringify(this.worldData));
+        },
+
+        clearWorld: function() {
+          localStorage.removeItem('vr_minecraft_save');
+          this.worldData = {};
+          this.generateFlatWorld();
+        },
+
+        updateHUD: function() {
+          if(this.hudText) {
+            this.hudText.setAttribute('value', `BLOCK: ${BLOCK_TYPES[this.selectedBlockIndex].name}`);
+          }
+        }
+      });
+
+      // INTERACTION HANDLER FOR THE CONTROLLER
+      AFRAME.registerComponent('miner-hand', {
+        init: function () {
+          this.worldManager = document.querySelector('#world').components['world-manager'];
+
+          // Right Index Trigger -> Destroy target voxel
+          this.el.addEventListener('triggerdown', () => {
+            const intersection = this.getIntersection();
+            if (intersection) {
+              this.worldManager.removeBlockEntity(intersection.el);
+            }
+          });
+
+          // Right Grip Side Button -> Place voxel on face normal
+          this.el.addEventListener('gripdown', () => {
+            const intersection = this.getIntersection();
+            if (intersection) {
+              this.worldManager.addBlockAtIntersection(intersection);
+            }
+          });
+
+          // Right 'A' Button -> Cycle through inventory items
+          this.el.addEventListener('abuttondown', () => {
+            document.querySelector('#world').emit('cycle-block');
+          });
+        },
+
+        getIntersection: function() {
+          let raycasterComp = this.el.components.raycaster;
+          if (raycasterComp && raycasterComp.intersections.length > 0) {
+            // Return first hit object matching target criteria
+            return raycasterComp.intersections[0];
+          }
+          return null;
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <a-scene background="color: #87CEEB">
+      
+      <a-entity id="rig" movement-controls="controls: gamepad; speed: 0.15" position="0 1 0">
+        <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
+        
+        <a-entity oculus-touch-controls="hand: left"></a-entity>
+        
+        <a-entity id="right-hand" oculus-touch-controls="hand: right" 
+                  raycaster="objects: .voxel; far: 8; showLine: true; lineColor: #ffffff;" 
+                  miner-hand>
+          
+          <a-entity position="0 0.08 0.05" rotation="-45 0 0">
+            <a-plane width="0.25" height="0.1" color="#222" opacity="0.8"></a-plane>
+            <a-text id="hud-text" value="" align="center" color="#FFF" width="1" position="0 0 0.01"></a-text>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+
+      <a-entity light="type: ambient; intensity: 0.6;"></a-entity>
+      <a-entity light="type: directional; intensity: 0.6; castShadow: false;" position="-1 5 2"></a-entity>
+
+      <a-entity id="world" world-manager></a-entity>
+
+    </a-scene>
+  </body>
+</html>
           this.wandDirection = new THREE.Vector3();
           this.isTracking = false;
           this.isHeld = false;
