@@ -1,31 +1,36 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Hardened VR Voxel Engine</title>
+    <title>VR Voxel Engine - Expanded</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 
     <script>
-      // SANDBOX DESIGN PARAMETERS
+      // EXPANDED BLOCK PALETTE
       const BLOCK_TYPES = [
         { id: 'grass', color: '#557a46', name: '🌿 Grass' },
         { id: 'dirt',  color: '#8b5a2b', name: '🟫 Dirt' },
-        { id: 'stone', color: '#73777B', name: '🪨 Stone' }
+        { id: 'stone', color: '#73777B', name: '🪨 Stone' },
+        { id: 'wood',  color: '#5C4033', name: '🪵 Wood' },
+        { id: 'leaves',color: '#228B22', name: '🍃 Leaves' },
+        { id: 'sand',  color: '#EEDC82', name: '🏖️ Sand' },
+        { id: 'brick', color: '#B22222', name: '🧱 Brick' },
+        { id: 'gold',  color: '#FFD700', name: '✨ Gold' },
+        { id: 'obsidian', color: '#1a1a24', name: '🌌 Obsidian' },
+        { id: 'glass', color: '#87CEFA', name: '🪟 Glass', transparent: true, opacity: 0.4 }
       ];
 
-      const WORLD_BOUNDS = { minX: -7, maxX: 6, minZ: -12, maxZ: 1, minY: -2, maxY: 6 };
+      const WORLD_BOUNDS = { minX: -7, maxX: 6, minZ: -12, maxZ: 1, minY: -2, maxY: 10 };
 
-      // NATIVE, PERFORMANCE-HARDENED CONTROLS (Zero allocations in tick)
+      // MOVEMENT CONTROLS
       AFRAME.registerComponent('vr-controls', {
         init: function () {
           this.joyX = 0;
           this.joyY = 0;
-          this.moveSpeed = 0.06;
+          this.moveSpeed = 0.08; 
 
-          // Cache references once at start to save processor cycles
           this.rig = document.querySelector('#rig');
           this.cam = document.querySelector('a-camera');
           
-          // Memory Pooling: Allocate vectors once here so the Garbage Collector never triggers
           this.direction = new THREE.Vector3();
           this.sideDirection = new THREE.Vector3();
           this.upAxis = new THREE.Vector3(0, 1, 0);
@@ -36,30 +41,26 @@
           });
         },
         tick: function () {
-          // Deadzone calculation protection
           if (Math.abs(this.joyX) < 0.15 && Math.abs(this.joyY) < 0.15) return;
 
-          // Calculate vectors directly using pre-allocated memory pools
           this.cam.object3D.getWorldDirection(this.direction);
           this.direction.y = 0; 
           this.direction.normalize();
-
           this.sideDirection.copy(this.direction).applyAxisAngle(this.upAxis, Math.PI / 2);
 
-          // Mutate the 3D transforms directly to bypass heavy layout updates
           this.rig.object3D.position.addScaledVector(this.direction, -this.joyY * this.moveSpeed);
           this.rig.object3D.position.addScaledVector(this.sideDirection, this.joyX * this.moveSpeed);
         }
       });
 
-      // MATRICIAL WORLD ARCHITECT (Optimized memory footprint)
+      // WORLD ARCHITECT
       AFRAME.registerComponent('world-manager', {
         init: function () {
           this.worldData = {}; 
           this.selectedBlockIndex = 0;
           this.hudText = document.querySelector('#hud-text');
 
-          const savedWorld = localStorage.getItem('vr_sandbox_save_v4');
+          const savedWorld = localStorage.getItem('vr_sandbox_save_v5');
           if (savedWorld) {
             this.worldData = JSON.parse(savedWorld);
             this.renderWorld();
@@ -95,31 +96,40 @@
           Object.keys(this.worldData).forEach(key => {
             const [x, y, z] = key.split(',').map(Number);
             const blockTypeIdx = this.worldData[key];
-            
-            const blockInfo = BLOCK_TYPES[blockTypeIdx];
-            if (blockInfo) {
-              let box = document.createElement('a-box');
-              box.setAttribute('class', 'voxel');
-              box.setAttribute('position', `${x} ${y} ${z}`);
-              box.setAttribute('width', '1');
-              box.setAttribute('height', '1');
-              box.setAttribute('depth', '1');
-              box.setAttribute('material', `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`);
-              box.dataset.gridPos = `${x},${y},${z}`;
-              fragment.appendChild(box);
-            }
+            this.createVoxelNode(x, y, z, blockTypeIdx, fragment);
           });
 
           this.el.appendChild(fragment);
         },
 
+        createVoxelNode: function(x, y, z, typeIdx, parentNode) {
+          const blockInfo = BLOCK_TYPES[typeIdx];
+          if (!blockInfo) return;
+
+          let box = document.createElement('a-box');
+          box.setAttribute('class', 'voxel');
+          box.setAttribute('position', `${x} ${y} ${z}`);
+          
+          // Construct material string (Handling transparency for glass)
+          let mat = `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`;
+          if (blockInfo.transparent) {
+            mat += ` transparent: true; opacity: ${blockInfo.opacity};`;
+          }
+          box.setAttribute('material', mat);
+          box.dataset.gridPos = `${x},${y},${z}`;
+          
+          parentNode.appendChild(box);
+        },
+
         addBlockAtIntersection: function(intersection) {
-          const currentBlockPos = intersection.el.object3D.position;
+          // FIX: Bulletproof placement math based on exact hit coordinate
+          const hitPoint = intersection.point;
           const normal = intersection.face.normal;
 
-          const newX = Math.round(currentBlockPos.x + normal.x);
-          const newY = Math.round(currentBlockPos.y + normal.y);
-          const newZ = Math.round(currentBlockPos.z + normal.z);
+          // Push the coordinate exactly 0.5 units outward along the clicked face, then snap to grid
+          const newX = Math.round(hitPoint.x + (normal.x * 0.5));
+          const newY = Math.round(hitPoint.y + (normal.y * 0.5));
+          const newZ = Math.round(hitPoint.z + (normal.z * 0.5));
           const newKey = `${newX},${newY},${newZ}`;
 
           if (newX < WORLD_BOUNDS.minX || newX > WORLD_BOUNDS.maxX ||
@@ -129,15 +139,13 @@
           if (this.worldData[newKey] !== undefined) return;
 
           this.worldData[newKey] = this.selectedBlockIndex;
-          
-          let box = document.createElement('a-box');
-          box.setAttribute('class', 'voxel');
-          box.setAttribute('position', `${newX} ${newY} ${newZ}`);
-          box.setAttribute('material', `color: ${BLOCK_TYPES[this.selectedBlockIndex].color}; roughness: 1.0; flatShading: true;`);
-          box.dataset.gridPos = newKey;
-          this.el.appendChild(box);
-
+          this.createVoxelNode(newX, newY, newZ, this.selectedBlockIndex, this.el);
           this.saveWorld();
+
+          // Force raycaster to immediately recognize the newly spawned block
+          setTimeout(() => {
+            document.querySelector('#right-hand').components.raycaster.refreshObjects();
+          }, 10);
         },
 
         removeBlockEntity: function(blockEl) {
@@ -146,34 +154,40 @@
             delete this.worldData[key];
             blockEl.parentNode.removeChild(blockEl);
             this.saveWorld();
+            
+            setTimeout(() => {
+              document.querySelector('#right-hand').components.raycaster.refreshObjects();
+            }, 10);
           }
         },
 
         saveWorld: function() {
-          localStorage.setItem('vr_sandbox_save_v4', JSON.stringify(this.worldData));
+          localStorage.setItem('vr_sandbox_save_v5', JSON.stringify(this.worldData));
         },
 
         updateHUD: function() {
           if(this.hudText) {
-            this.hudText.setAttribute('value', `ITEM: ${BLOCK_TYPES[this.selectedBlockIndex].name}`);
+            this.hudText.setAttribute('value', `ITEM: ${BLOCK_TYPES[this.selectedBlockIndex].name}\n\n[Trigger] = Build\n[Grip] = Break`);
           }
         }
       });
 
-      // TARGET DETECTOR (No setAttribute calls inside tick)
+      // TARGET DETECTOR
       AFRAME.registerComponent('miner-hand', {
         init: function () {
           this.worldManager = document.querySelector('#world').components['world-manager'];
           this.highlightBox = document.querySelector('#highlight-frame');
 
+          // SWAPPED CONTROLS: Index Trigger now builds
           this.el.addEventListener('triggerdown', () => {
             const hit = this.getIntersection();
-            if (hit) this.worldManager.removeBlockEntity(hit.el);
+            if (hit) this.worldManager.addBlockAtIntersection(hit);
           });
 
+          // SWAPPED CONTROLS: Middle Grip now breaks
           this.el.addEventListener('gripdown', () => {
             const hit = this.getIntersection();
-            if (hit) this.worldManager.addBlockAtIntersection(hit);
+            if (hit) this.worldManager.removeBlockEntity(hit.el);
           });
 
           this.el.addEventListener('abuttondown', () => {
@@ -192,7 +206,6 @@
         tick: function() {
           const hit = this.getIntersection();
           if (hit && hit.el && hit.el.classList.contains('voxel')) {
-            // Update the underlying Three.js node instantly to avoid garbage collection freezes
             this.highlightBox.object3D.position.copy(hit.el.object3D.position);
             this.highlightBox.object3D.visible = true;
           } else {
@@ -201,10 +214,9 @@
         }
       });
 
-      // LIGHTWEIGHT DIRECT MATRICIAL LIGHT ROTATION (Replaces buggy animation components)
+      // DAY/NIGHT
       AFRAME.registerComponent('day-night-cycle', {
         tick: function (time, timeDelta) {
-          // One total planetary solar revolution every 120 seconds
           var rotationIncrement = (timeDelta / 120000) * Math.PI * 2;
           this.el.object3D.rotation.x += rotationIncrement;
         }
@@ -213,7 +225,6 @@
   </head>
   <body>
     <a-scene fog="type: linear; color: #A0C4DF; near: 8; far: 15">
-      
       <a-sky color="#A0C4DF"></a-sky>
 
       <a-entity position="0 0 -5" day-night-cycle>
@@ -233,7 +244,7 @@
                   miner-hand>
           
           <a-entity position="0 0.08 0.05" rotation="-45 0 0">
-            <a-plane width="0.22" height="0.08" color="#111" opacity="0.9"></a-plane>
+            <a-plane width="0.28" height="0.14" color="#111" opacity="0.9"></a-plane>
             <a-text id="hud-text" value="" align="center" color="#00FFCC" width="0.9" position="0 0 0.01"></a-text>
           </a-entity>
         </a-entity>
@@ -248,7 +259,6 @@
                visible="false">
         </a-box>
       </a-entity>
-
     </a-scene>
   </body>
 </html>
