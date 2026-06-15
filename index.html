@@ -1,49 +1,51 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Web Minecraft</title>
+    <title>VR Voxel Engine v2</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.1.0/dist/aframe-extras.min.js"></script>
 
     <script>
-      // BLOCK TYPES DEFINITION
+      // SANDBOX DESIGN SYSTEM CONFIGURATION
       const BLOCK_TYPES = [
         { id: 'grass', color: '#557a46', name: '🌿 Grass' },
         { id: 'dirt',  color: '#8b5a2b', name: '🟫 Dirt' },
-        { id: 'stone', color: '#808080', name: '🪨 Stone' }
+        { id: 'stone', color: '#73777B', name: '🪨 Stone' }
       ];
 
-      // CORE WORLD MANAGER (Handles generation, building, destroying, and saving)
+      // 16x16 MATRIX BOUNDARIES 
+      const WORLD_BOUNDS = { minX: -8, maxX: 7, minZ: -12, maxZ: 3, minY: -2, maxY: 8 };
+
+      // CENTRAL WORLD ARCHITECT
       AFRAME.registerComponent('world-manager', {
         init: function () {
-          this.worldData = {}; // Format: "x,y,z": "blockTypeIndex"
+          this.worldData = {}; 
           this.selectedBlockIndex = 0;
           this.hudText = document.querySelector('#hud-text');
 
-          // Try to load world from LocalStorage
-          const savedWorld = localStorage.getItem('vr_minecraft_save');
+          // Local Storage Verification Loop
+          const savedWorld = localStorage.getItem('vr_sandbox_save_v2');
           if (savedWorld) {
             this.worldData = JSON.parse(savedWorld);
             this.renderWorld();
           } else {
-            this.generateFlatWorld();
+            this.generateProceduralSandbox();
           }
           
           this.updateHUD();
 
-          // Listen for block selection change from controller
           this.el.addEventListener('cycle-block', () => {
             this.selectedBlockIndex = (this.selectedBlockIndex + 1) % BLOCK_TYPES.length;
             this.updateHUD();
           });
         },
 
-        generateFlatWorld: function() {
-          // Generate a simple 10x10 flat landscape of two block layers
-          for (let x = -5; x <= 5; x++) {
-            for (let z = -5; z <= -15; z++) {
-              this.worldData[`${x},-1,${z}`] = 1; // Layer -1: Dirt
-              this.worldData[`${x},0,${z}`] = 0;  // Layer 0: Grass
+        generateProceduralSandbox: function() {
+          // Generate a strict 16x16 grid utilizing two core layers
+          for (let x = WORLD_BOUNDS.minX; x <= WORLD_BOUNDS.maxX; x++) {
+            for (let z = WORLD_BOUNDS.minZ; z <= WORLD_BOUNDS.maxZ; z++) {
+              this.worldData[`${x},-1,${z}`] = 1; // Base Layer: Dirt
+              this.worldData[`${x},0,${z}`] = 0;  // Top Layer: Grass
             }
           }
           this.renderWorld();
@@ -51,11 +53,9 @@
         },
 
         renderWorld: function() {
-          // Clear any current rendered blocks
           const existingBlocks = document.querySelectorAll('.voxel');
           existingBlocks.forEach(b => b.parentNode.removeChild(b));
 
-          // Spawn entities based on world state dictionary
           Object.keys(this.worldData).forEach(key => {
             const [x, y, z] = key.split(',').map(Number);
             const blockTypeIdx = this.worldData[key];
@@ -73,29 +73,37 @@
           box.setAttribute('width', '1');
           box.setAttribute('height', '1');
           box.setAttribute('depth', '1');
-          box.setAttribute('material', `color: ${blockInfo.color}; roughness: 0.9;`);
-          // Store raw grid position metadata on the element
+          box.setAttribute('material', `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`);
           box.dataset.gridPos = `${x},${y},${z}`;
 
           this.el.appendChild(box);
         },
 
         addBlockAtIntersection: function(intersection) {
-          // Calculate target adjacent grid position based on face normal vector
           const currentBlockPos = intersection.el.object3D.position;
           const normal = intersection.face.normal;
 
+          // Compute absolute grid positioning coordinates
           const newX = Math.round(currentBlockPos.x + normal.x);
           const newY = Math.round(currentBlockPos.y + normal.y);
           const newZ = Math.round(currentBlockPos.z + normal.z);
           const newKey = `${newX},${newY},${newZ}`;
 
-          // Only build if space is unoccupied
-          if (this.worldData[newKey] === undefined) {
-            this.worldData[newKey] = this.selectedBlockIndex;
-            this.spawnBlockEntity(newX, newY, newZ, this.selectedBlockIndex);
-            this.saveWorld();
+          // PLACEMENT VALIDATION SECURITY GUARDRAILS
+          if (newX < WORLD_BOUNDS.minX || newX > WORLD_BOUNDS.maxX ||
+              newZ < WORLD_BOUNDS.minZ || newZ > WORLD_BOUNDS.maxZ ||
+              newY < WORLD_BOUNDS.minY || newY > WORLD_BOUNDS.maxY) {
+            return; // Enforce 16x16 perimeter boundaries
           }
+
+          if (this.worldData[newKey] !== undefined) {
+            return; // Block overlapping coordinate collision validation
+          }
+
+          // Write block data to map index
+          this.worldData[newKey] = this.selectedBlockIndex;
+          this.spawnBlockEntity(newX, newY, newZ, this.selectedBlockIndex);
+          this.saveWorld();
         },
 
         removeBlockEntity: function(blockEl) {
@@ -108,44 +116,35 @@
         },
 
         saveWorld: function() {
-          localStorage.setItem('vr_minecraft_save', JSON.stringify(this.worldData));
-        },
-
-        clearWorld: function() {
-          localStorage.removeItem('vr_minecraft_save');
-          this.worldData = {};
-          this.generateFlatWorld();
+          localStorage.setItem('vr_sandbox_save_v2', JSON.stringify(this.worldData));
         },
 
         updateHUD: function() {
           if(this.hudText) {
-            this.hudText.setAttribute('value', `BLOCK: ${BLOCK_TYPES[this.selectedBlockIndex].name}`);
+            this.hudText.setAttribute('value', `ITEM: ${BLOCK_TYPES[this.selectedBlockIndex].name}`);
           }
         }
       });
 
-      // INTERACTION HANDLER FOR THE CONTROLLER
+      // TARGET DETECTOR & HIGHLIGHT MANAGER
       AFRAME.registerComponent('miner-hand', {
         init: function () {
           this.worldManager = document.querySelector('#world').components['world-manager'];
+          this.highlightBox = document.querySelector('#highlight-frame');
 
-          // Right Index Trigger -> Destroy target voxel
+          // Destruction Event Trigger
           this.el.addEventListener('triggerdown', () => {
-            const intersection = this.getIntersection();
-            if (intersection) {
-              this.worldManager.removeBlockEntity(intersection.el);
-            }
+            const hit = this.getIntersection();
+            if (hit) this.worldManager.removeBlockEntity(hit.el);
           });
 
-          // Right Grip Side Button -> Place voxel on face normal
+          // Placement Event Trigger
           this.el.addEventListener('gripdown', () => {
-            const intersection = this.getIntersection();
-            if (intersection) {
-              this.worldManager.addBlockAtIntersection(intersection);
-            }
+            const hit = this.getIntersection();
+            if (hit) this.worldManager.addBlockAtIntersection(hit);
           });
 
-          // Right 'A' Button -> Cycle through inventory items
+          // Inventory Toggle Hook
           this.el.addEventListener('abuttondown', () => {
             document.querySelector('#world').emit('cycle-block');
           });
@@ -154,37 +153,62 @@
         getIntersection: function() {
           let raycasterComp = this.el.components.raycaster;
           if (raycasterComp && raycasterComp.intersections.length > 0) {
-            // Return first hit object matching target criteria
             return raycasterComp.intersections[0];
           }
           return null;
+        },
+
+        // Real-Time Wireframe Highlight Rendering Loop
+        tick: function() {
+          const hit = this.getIntersection();
+          if (hit && hit.el.classList.contains('voxel')) {
+            let targetPos = hit.el.getAttribute('position');
+            this.highlightBox.setAttribute('position', targetPos);
+            this.highlightBox.setAttribute('visible', 'true');
+          } else {
+            this.highlightBox.setAttribute('visible', 'false');
+          }
         }
       });
     </script>
   </head>
   <body>
-    <a-scene background="color: #87CEEB">
+    <a-scene fog="type: linear; color: #A0C4DF; near: 10; far: 18">
       
+      <a-sky color="#A0C4DF"></a-sky>
+
+      <a-entity position="0 0 -4" animation="property: rotation; to: 360 0 0; loop: true; dur: 90000; easing: linear">
+        <a-entity light="type: directional; intensity: 0.8; color: #FFFDF0;" position="0 25 0"></a-entity>
+        <a-entity light="type: directional; intensity: 0.2; color: #334466;" position="0 -25 0"></a-entity>
+      </a-entity>
+      
+      <a-entity light="type: ambient; intensity: 0.4; color: #FFFFFF;"></a-entity>
+
       <a-entity id="rig" movement-controls="controls: gamepad; speed: 0.15" position="0 1 0">
         <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
         
         <a-entity oculus-touch-controls="hand: left"></a-entity>
         
         <a-entity id="right-hand" oculus-touch-controls="hand: right" 
-                  raycaster="objects: .voxel; far: 8; showLine: true; lineColor: #ffffff;" 
+                  raycaster="objects: .voxel; far: 7; showLine: true; lineColor: #ffa500;" 
                   miner-hand>
           
           <a-entity position="0 0.08 0.05" rotation="-45 0 0">
-            <a-plane width="0.25" height="0.1" color="#222" opacity="0.8"></a-plane>
-            <a-text id="hud-text" value="" align="center" color="#FFF" width="1" position="0 0 0.01"></a-text>
+            <a-plane width="0.22; " height="0.08" color="#111" opacity="0.9"></a-plane>
+            <a-text id="hud-text" value="" align="center" color="#00FFCC" width="0.9" position="0 0 0.01"></a-text>
           </a-entity>
         </a-entity>
       </a-entity>
 
-      <a-entity light="type: ambient; intensity: 0.6;"></a-entity>
-      <a-entity light="type: directional; intensity: 0.6; castShadow: false;" position="-1 5 2"></a-entity>
+      <a-plane position="0 -1.05 0" rotation="-90 0 0" width="5000" height="5000" visible="false"></a-plane>
 
-      <a-entity id="world" world-manager></a-entity>
+      <a-entity id="world" world-manager>
+        <a-box id="highlight-frame" 
+               material="color: #00FF66; wireframe: true; wireframeLineWidth: 4; shader: flat;" 
+               scale="1.02 1.02 1.02" 
+               visible="false">
+        </a-box>
+      </a-entity>
 
     </a-scene>
   </body>
