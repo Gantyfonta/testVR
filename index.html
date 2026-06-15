@@ -1,49 +1,166 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Quest 2 VR Target Game</title>
+    <title>VR Magic Wand Training</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
     
     <script>
-      AFRAME.registerComponent('target-logic', {
+      // GESTURE ENGINE & SPELL CASTER
+      AFRAME.registerComponent('wand-caster', {
+        init: function () {
+          this.startPos = new THREE.Vector3();
+          this.endPos = new THREE.Vector3();
+          this.isTracking = false;
+
+          // Bind event listeners for the Quest controller trigger
+          this.el.addEventListener('triggerdown', () => {
+            this.el.object3D.getWorldPosition(this.startPos);
+            this.isTracking = true;
+          });
+
+          this.el.addEventListener('triggerup', () => {
+            if (!this.isTracking) return;
+            this.el.object3D.getWorldPosition(this.endPos);
+            this.isTracking = false;
+
+            // Calculate motion vectors
+            let dx = this.endPos.x - this.startPos.x;
+            let dy = this.endPos.y - this.startPos.y;
+            let dz = this.endPos.z - this.startPos.z;
+
+            let absX = Math.abs(dx);
+            let absY = Math.abs(dy);
+            let absZ = Math.abs(dz);
+
+            let spellType = "spark"; // Default fallback
+            let threshold = 0.15;    // Minimum movement meters to trigger a spell
+            let maxMotion = Math.max(absX, absY, absZ);
+
+            if (maxMotion > threshold) {
+              if (maxMotion === absY) {
+                spellType = "fireball";   // Vertical slash down/up
+              } else if (maxMotion === absX) {
+                spellType = "frost";      // Horizontal swipe left/right
+              } else if (maxMotion === absZ && dz < 0) {
+                spellType = "lightning";  // Sharp thrust forward
+              }
+            }
+
+            this.castSpell(spellType);
+          });
+        },
+
+        castSpell: function (type) {
+          let scene = document.querySelector('a-scene');
+          let projectile = document.createElement('a-entity');
+          
+          // Get current wand tip position
+          let wandPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(wandPos);
+          projectile.setAttribute('position', wandPos);
+
+          let color = '#ffffff';
+          let spellName = 'Fizzled Spark';
+          let geometry = 'primitive: sphere; radius: 0.08';
+
+          // Define spells based on motion
+          if (type === 'fireball') {
+            color = '#ff4500';
+            spellName = '🔥 FIREBALL!';
+            geometry = 'primitive: sphere; radius: 0.25';
+          } else if (type === 'frost') {
+            color = '#00bfff';
+            spellName = '❄️ FROST SHARD!';
+            geometry = 'primitive: cone; radiusBottom: 0.1; height: 0.5; rotation: 90 0 0';
+          } else if (type === 'lightning') {
+            color = '#ffff00';
+            spellName = '⚡ LIGHTNING BOLT!';
+            geometry = 'primitive: cylinder; radius: 0.03; height: 0.8; rotation: 90 0 0';
+          }
+
+          projectile.setAttribute('geometry', geometry);
+          projectile.setAttribute('material', `color: ${color}; shader: flat; emissive: ${color}`);
+
+          // Update HUD Text
+          document.querySelector('#hud-text').setAttribute('value', spellName);
+
+          // Fly toward the dummy (located at 0, 1.5, -5)
+          projectile.setAttribute('animation', {
+            property: 'position',
+            to: '0 1.5 -5',
+            dur: 600,
+            easing: 'linear'
+          });
+
+          scene.appendChild(projectile);
+
+          // Impact detection when projectile arrives at the dummy
+          setTimeout(() => {
+            projectile.remove();
+            document.querySelector('#dummy').emit('hit', { spell: type });
+          }, 600);
+        }
+      });
+
+      // TRAINING DUMMY REACTION LOGIC
+      AFRAME.registerComponent('dummy-reactor', {
         init: function () {
           let el = this.el;
-          
-          // Listen for a click/trigger event from the VR controller
-          el.addEventListener('click', function () {
-            // Pick a random new color
-            const colors = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFE633'];
-            const newColor = colors[Math.floor(Math.random() * colors.length)];
-            el.setAttribute('color', newColor);
+          let dummyBody = el.querySelector('#dummy-body');
+
+          el.addEventListener('hit', (e) => {
+            let spell = e.detail.spell;
+            let reactionColor = '#ffffff';
+
+            if (spell === 'fireball') reactionColor = '#ff4500';
+            if (spell === 'frost') reactionColor = '#00bfff';
+            if (spell === 'lightning') reactionColor = '#ffff00';
+
+            // Flash spell color
+            dummyBody.setAttribute('color', reactionColor);
             
-            // Move the box to a random new position
-            const x = (Math.random() - 0.5) * 10; // Between -5 and 5
-            const y = 1 + Math.random() * 3;      // Between 1 and 4
-            const z = -2 - Math.random() * 5;     // Between -2 and -7
-            
-            el.setAttribute('position', {x: x, y: y, z: z});
+            // Trigger the wobble animation
+            el.emit('wobble');
+
+            // Reset dummy color after a brief moment
+            setTimeout(() => {
+              dummyBody.setAttribute('color', '#d2b48c');
+            }, 300);
           });
         }
       });
     </script>
   </head>
   <body>
-    <a-scene environment="preset: tron">
+    <a-scene environment="preset: osiris; lighting: point">
       
       <a-entity id="rig">
-        <a-camera position="0 1.6 0">
-          <a-cursor raycaster="objects: .clickable" visible="true"></a-cursor>
-        </a-camera>
-        <a-entity laser-controls="hand: left" raycaster="objects: .clickable; far: 20"></a-entity>
-        <a-entity laser-controls="hand: right" raycaster="objects: .clickable; far: 20"></a-entity>
+        <a-camera position="0 1.6 0"></a-camera>
+        
+        <a-entity oculus-touch-controls="hand: right" wand-caster>
+          <a-cylinder position="0 0 -0.2" rotation="90 0 0" radius="0.015" height="0.4" color="#4a2c11">
+            <a-sphere position="0 0.2 0" radius="0.025" color="#9370db" material="shader: flat;"></a-sphere>
+          </a-cylinder>
+        </a-entity>
       </a-entity>
 
-      <a-text value="Point and shoot the spinning box!" position="-1.5 3 -4" color="#FFFFFF" width="6"></a-text>
+      <a-entity position="0 3.5 -4.5">
+        <a-text value="SPELLBOOK" align="center" color="#ffffff" width="5" position="0 0.5 0"></a-text>
+        <a-text value="Vertical Slash -> Fireball\nHorizontal Swipe -> Frost Shard\nForward Thrust -> Lightning" align="center" color="#aaaaaa" width="3.5"></a-text>
+        <a-text id="hud-text" value="Ready your wand..." align="center" color="#00ffcc" width="6" position="0 -0.6 0"></a-text>
+      </a-entity>
 
-      <a-box class="clickable" target-logic position="0 1.5 -3" color="#4CC3D9" 
-             animation="property: rotation; to: 0 360 0; loop: true; dur: 3000; easing: linear">
-      </a-box>
+      <a-entity id="dummy" position="0 0 -5" dummy-reactor
+                animation="property: rotation; to: 0 0 10; from: 0 0 -10; dir: alternate; loop: 2; startEvents: wobble; dur: 100">
+        
+        <a-cylinder position="0 0.1 0" radius="0.4" height="0.2" color="#555"></a-cylinder>
+        <a-pole position="0 0.7 0" geometry="primitive: cylinder; radius: 0.05; height: 1.2" material="color: #333"></a-pole>
+        
+        <a-cylinder id="dummy-body" position="0 1.5 0" radius="0.25" height="1.0" color="#d2b48c"></a-cylinder>
+        <a-sphere position="0 2.1 0" radius="0.2" color="#c19a6b"></a-sphere>
+        <a-ring position="0 1.6 0.26" radius-inner="0.1" radius-outer="0.15" color="#8b0000"></a-ring>
+      </a-entity>
 
     </a-scene>
   </body>
