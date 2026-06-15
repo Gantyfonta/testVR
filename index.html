@@ -1,62 +1,65 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Sandbox Minecraft - Fixed</title>
+    <title>Hardened VR Voxel Engine</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 
     <script>
-      // SANDBOX DESIGN SYSTEM CONFIGURATION
+      // SANDBOX DESIGN PARAMETERS
       const BLOCK_TYPES = [
         { id: 'grass', color: '#557a46', name: '🌿 Grass' },
         { id: 'dirt',  color: '#8b5a2b', name: '🟫 Dirt' },
         { id: 'stone', color: '#73777B', name: '🪨 Stone' }
       ];
 
-      // PERFECTLY SIZED 14x14 MATRIX FOR HIGH HEADSET PERFORMANCE
       const WORLD_BOUNDS = { minX: -7, maxX: 6, minZ: -12, maxZ: 1, minY: -2, maxY: 6 };
 
-      // NATIVE LIGHTWEIGHT THUMBSTICK LOCOMOTION ENGINE (Replaces aframe-extras)
+      // NATIVE, PERFORMANCE-HARDENED CONTROLS (Zero allocations in tick)
       AFRAME.registerComponent('vr-controls', {
         init: function () {
           this.joyX = 0;
           this.joyY = 0;
-          this.moveSpeed = 0.06; // Adjust walking speed here
+          this.moveSpeed = 0.06;
 
-          // Listen for live thumbstick movements
+          // Cache references once at start to save processor cycles
+          this.rig = document.querySelector('#rig');
+          this.cam = document.querySelector('a-camera');
+          
+          // Memory Pooling: Allocate vectors once here so the Garbage Collector never triggers
+          this.direction = new THREE.Vector3();
+          this.sideDirection = new THREE.Vector3();
+          this.upAxis = new THREE.Vector3(0, 1, 0);
+
           this.el.addEventListener('axismove', (evt) => {
             this.joyX = evt.detail.axis[0] || 0;
             this.joyY = evt.detail.axis[1] || 0;
           });
         },
         tick: function () {
-          // Deadzone calculation to prevent thumbstick drift
+          // Deadzone calculation protection
           if (Math.abs(this.joyX) < 0.15 && Math.abs(this.joyY) < 0.15) return;
 
-          let rig = document.querySelector('#rig');
-          let cam = document.querySelector('a-camera');
-          
-          let direction = new THREE.Vector3();
-          cam.object3D.getWorldDirection(direction);
-          direction.y = 0; // Lock movement to horizontal ground plane
-          direction.normalize();
+          // Calculate vectors directly using pre-allocated memory pools
+          this.cam.object3D.getWorldDirection(this.direction);
+          this.direction.y = 0; 
+          this.direction.normalize();
 
-          let sideDirection = new THREE.Vector3();
-          sideDirection.copy(direction).applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+          this.sideDirection.copy(this.direction).applyAxisAngle(this.upAxis, Math.PI / 2);
 
-          // Apply vector transformations to our camera rig position
-          rig.object3D.position.addScaledVector(direction, -this.joyY * this.moveSpeed);
-          rig.object3D.position.addScaledVector(sideDirection, this.joyX * this.moveSpeed);
+          // Mutate the 3D transforms directly to bypass heavy layout updates
+          this.rig.object3D.position.addScaledVector(this.direction, -this.joyY * this.moveSpeed);
+          this.rig.object3D.position.addScaledVector(this.sideDirection, this.joyX * this.moveSpeed);
         }
       });
 
-      // CENTRAL WORLD ARCHITECT (Optimized with memory-batching)
+      // MATRICIAL WORLD ARCHITECT (Optimized memory footprint)
       AFRAME.registerComponent('world-manager', {
         init: function () {
           this.worldData = {}; 
           this.selectedBlockIndex = 0;
           this.hudText = document.querySelector('#hud-text');
 
-          const savedWorld = localStorage.getItem('vr_sandbox_save_v3');
+          const savedWorld = localStorage.getItem('vr_sandbox_save_v4');
           if (savedWorld) {
             this.worldData = JSON.parse(savedWorld);
             this.renderWorld();
@@ -75,8 +78,8 @@
         generateProceduralSandbox: function() {
           for (let x = WORLD_BOUNDS.minX; x <= WORLD_BOUNDS.maxX; x++) {
             for (let z = WORLD_BOUNDS.minZ; z <= WORLD_BOUNDS.maxZ; z++) {
-              this.worldData[`${x},-1,${z}`] = 1; // Base: Dirt
-              this.worldData[`${x},0,${z}`] = 0;  // Top: Grass
+              this.worldData[`${x},-1,${z}`] = 1; 
+              this.worldData[`${x},0,${z}`] = 0;  
             }
           }
           this.renderWorld();
@@ -87,7 +90,6 @@
           const existingBlocks = document.querySelectorAll('.voxel');
           existingBlocks.forEach(b => b.parentNode.removeChild(b));
 
-          // FIX: Use a DocumentFragment memory-buffer to batch all additions at once
           const fragment = document.createDocumentFragment();
 
           Object.keys(this.worldData).forEach(key => {
@@ -108,7 +110,6 @@
             }
           });
 
-          // Single atomic DOM insert pass (prevents layout crashing)
           this.el.appendChild(fragment);
         },
 
@@ -121,17 +122,14 @@
           const newZ = Math.round(currentBlockPos.z + normal.z);
           const newKey = `${newX},${newY},${newZ}`;
 
-          // Perimeter boundary checks
           if (newX < WORLD_BOUNDS.minX || newX > WORLD_BOUNDS.maxX ||
               newZ < WORLD_BOUNDS.minZ || newZ > WORLD_BOUNDS.maxZ ||
               newY < WORLD_BOUNDS.minY || newY > WORLD_BOUNDS.maxY) return;
 
-          // Double space occupancy validation pass
           if (this.worldData[newKey] !== undefined) return;
 
           this.worldData[newKey] = this.selectedBlockIndex;
           
-          // Fast localized item generation
           let box = document.createElement('a-box');
           box.setAttribute('class', 'voxel');
           box.setAttribute('position', `${newX} ${newY} ${newZ}`);
@@ -152,7 +150,7 @@
         },
 
         saveWorld: function() {
-          localStorage.setItem('vr_sandbox_save_v3', JSON.stringify(this.worldData));
+          localStorage.setItem('vr_sandbox_save_v4', JSON.stringify(this.worldData));
         },
 
         updateHUD: function() {
@@ -162,7 +160,7 @@
         }
       });
 
-      // TARGET DETECTOR
+      // TARGET DETECTOR (No setAttribute calls inside tick)
       AFRAME.registerComponent('miner-hand', {
         init: function () {
           this.worldManager = document.querySelector('#world').components['world-manager'];
@@ -193,13 +191,22 @@
 
         tick: function() {
           const hit = this.getIntersection();
-          if (hit && hit.el.classList.contains('voxel')) {
-            let targetPos = hit.el.getAttribute('position');
-            this.highlightBox.setAttribute('position', targetPos);
-            this.highlightBox.setAttribute('visible', 'true');
+          if (hit && hit.el && hit.el.classList.contains('voxel')) {
+            // Update the underlying Three.js node instantly to avoid garbage collection freezes
+            this.highlightBox.object3D.position.copy(hit.el.object3D.position);
+            this.highlightBox.object3D.visible = true;
           } else {
-            this.highlightBox.setAttribute('visible', 'false');
+            this.highlightBox.object3D.visible = false;
           }
+        }
+      });
+
+      // LIGHTWEIGHT DIRECT MATRICIAL LIGHT ROTATION (Replaces buggy animation components)
+      AFRAME.registerComponent('day-night-cycle', {
+        tick: function (time, timeDelta) {
+          // One total planetary solar revolution every 120 seconds
+          var rotationIncrement = (timeDelta / 120000) * Math.PI * 2;
+          this.el.object3D.rotation.x += rotationIncrement;
         }
       });
     </script>
@@ -209,7 +216,7 @@
       
       <a-sky color="#A0C4DF"></a-sky>
 
-      <a-entity position="0 0 -5" animation="property: rotation; to: 360 0 0; loop: true; dur: 120000; easing: linear">
+      <a-entity position="0 0 -5" day-night-cycle>
         <a-entity light="type: directional; intensity: 0.8; color: #FFFDF0;" position="0 20 0"></a-entity>
         <a-entity light="type: directional; intensity: 0.15; color: #334466;" position="0 -20 0"></a-entity>
       </a-entity>
@@ -219,9 +226,9 @@
       <a-entity id="rig" position="0 1 0">
         <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
         
-        <a-entity id="left-hand" oculus-touch-controls="hand: left" vr-controls></a-entity>
+        <a-entity id="left-hand" oculus-touch-controls="hand: left; model: false;" vr-controls></a-entity>
         
-        <a-entity id="right-hand" oculus-touch-controls="hand: right" 
+        <a-entity id="right-hand" oculus-touch-controls="hand: right; model: false;" 
                   raycaster="objects: .voxel; far: 6; showLine: true; lineColor: #ffaa00;" 
                   miner-hand>
           
