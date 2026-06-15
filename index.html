@@ -1,11 +1,10 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Voxel Engine - Expanded</title>
+    <title>VR Voxel Engine - Full Locomotion</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 
     <script>
-      // EXPANDED BLOCK PALETTE
       const BLOCK_TYPES = [
         { id: 'grass', color: '#557a46', name: '🌿 Grass' },
         { id: 'dirt',  color: '#8b5a2b', name: '🟫 Dirt' },
@@ -19,18 +18,15 @@
         { id: 'glass', color: '#87CEFA', name: '🪟 Glass', transparent: true, opacity: 0.4 }
       ];
 
-      const WORLD_BOUNDS = { minX: -7, maxX: 6, minZ: -12, maxZ: 1, minY: -2, maxY: 10 };
+      const WORLD_BOUNDS = { minX: -20, maxX: 20, minZ: -20, maxZ: 20, minY: -2, maxY: 15 };
 
-      // MOVEMENT CONTROLS
-      AFRAME.registerComponent('vr-controls', {
+      // LEFT HAND: SMOOTH LOCOMOTION
+      AFRAME.registerComponent('thumbstick-movement', {
         init: function () {
-          this.joyX = 0;
-          this.joyY = 0;
+          this.joyX = 0; this.joyY = 0;
           this.moveSpeed = 0.08; 
-
           this.rig = document.querySelector('#rig');
           this.cam = document.querySelector('a-camera');
-          
           this.direction = new THREE.Vector3();
           this.sideDirection = new THREE.Vector3();
           this.upAxis = new THREE.Vector3(0, 1, 0);
@@ -53,6 +49,28 @@
         }
       });
 
+      // RIGHT HAND: SNAP TURNING
+      AFRAME.registerComponent('thumbstick-turn', {
+        init: function () {
+          this.rig = document.querySelector('#rig');
+          this.canTurn = true; 
+
+          this.el.addEventListener('axismove', (evt) => {
+            const joyX = evt.detail.axis[0] || 0;
+            // Activate turn when pushed past threshold
+            if (Math.abs(joyX) > 0.6) {
+              if (this.canTurn) {
+                // Turn 45 Degrees (Math.PI / 4) Left or Right
+                this.rig.object3D.rotation.y += (joyX < 0 ? 1 : -1) * (Math.PI / 4);
+                this.canTurn = false; // Lock until stick returns to center
+              }
+            } else if (Math.abs(joyX) < 0.3) {
+              this.canTurn = true; // Unlock
+            }
+          });
+        }
+      });
+
       // WORLD ARCHITECT
       AFRAME.registerComponent('world-manager', {
         init: function () {
@@ -60,7 +78,7 @@
           this.selectedBlockIndex = 0;
           this.hudText = document.querySelector('#hud-text');
 
-          const savedWorld = localStorage.getItem('vr_sandbox_save_v5');
+          const savedWorld = localStorage.getItem('vr_sandbox_save_v6');
           if (savedWorld) {
             this.worldData = JSON.parse(savedWorld);
             this.renderWorld();
@@ -77,8 +95,9 @@
         },
 
         generateProceduralSandbox: function() {
-          for (let x = WORLD_BOUNDS.minX; x <= WORLD_BOUNDS.maxX; x++) {
-            for (let z = WORLD_BOUNDS.minZ; z <= WORLD_BOUNDS.maxZ; z++) {
+          // Smaller starting patch so you can easily reach the edge and test the infinite bedrock
+          for (let x = -4; x <= 4; x++) {
+            for (let z = -6; z <= -1; z++) {
               this.worldData[`${x},-1,${z}`] = 1; 
               this.worldData[`${x},0,${z}`] = 0;  
             }
@@ -110,7 +129,6 @@
           box.setAttribute('class', 'voxel');
           box.setAttribute('position', `${x} ${y} ${z}`);
           
-          // Construct material string (Handling transparency for glass)
           let mat = `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`;
           if (blockInfo.transparent) {
             mat += ` transparent: true; opacity: ${blockInfo.opacity};`;
@@ -122,11 +140,9 @@
         },
 
         addBlockAtIntersection: function(intersection) {
-          // FIX: Bulletproof placement math based on exact hit coordinate
           const hitPoint = intersection.point;
           const normal = intersection.face.normal;
 
-          // Push the coordinate exactly 0.5 units outward along the clicked face, then snap to grid
           const newX = Math.round(hitPoint.x + (normal.x * 0.5));
           const newY = Math.round(hitPoint.y + (normal.y * 0.5));
           const newZ = Math.round(hitPoint.z + (normal.z * 0.5));
@@ -142,13 +158,15 @@
           this.createVoxelNode(newX, newY, newZ, this.selectedBlockIndex, this.el);
           this.saveWorld();
 
-          // Force raycaster to immediately recognize the newly spawned block
           setTimeout(() => {
             document.querySelector('#right-hand').components.raycaster.refreshObjects();
           }, 10);
         },
 
         removeBlockEntity: function(blockEl) {
+          // Prevent deleting the infinite bedrock floor
+          if (blockEl.classList.contains('ground')) return;
+
           const key = blockEl.dataset.gridPos;
           if (key && this.worldData[key] !== undefined) {
             delete this.worldData[key];
@@ -162,12 +180,12 @@
         },
 
         saveWorld: function() {
-          localStorage.setItem('vr_sandbox_save_v5', JSON.stringify(this.worldData));
+          localStorage.setItem('vr_sandbox_save_v6', JSON.stringify(this.worldData));
         },
 
         updateHUD: function() {
           if(this.hudText) {
-            this.hudText.setAttribute('value', `ITEM: ${BLOCK_TYPES[this.selectedBlockIndex].name}\n\n[Trigger] = Build\n[Grip] = Break`);
+            this.hudText.setAttribute('value', `ITEM: ${BLOCK_TYPES[this.selectedBlockIndex].name}\nL-Stick: Move\nR-Stick: Turn`);
           }
         }
       });
@@ -178,16 +196,14 @@
           this.worldManager = document.querySelector('#world').components['world-manager'];
           this.highlightBox = document.querySelector('#highlight-frame');
 
-          // SWAPPED CONTROLS: Index Trigger now builds
           this.el.addEventListener('triggerdown', () => {
             const hit = this.getIntersection();
             if (hit) this.worldManager.addBlockAtIntersection(hit);
           });
 
-          // SWAPPED CONTROLS: Middle Grip now breaks
           this.el.addEventListener('gripdown', () => {
             const hit = this.getIntersection();
-            if (hit) this.worldManager.removeBlockEntity(hit.el);
+            if (hit && hit.el) this.worldManager.removeBlockEntity(hit.el);
           });
 
           this.el.addEventListener('abuttondown', () => {
@@ -205,9 +221,23 @@
 
         tick: function() {
           const hit = this.getIntersection();
-          if (hit && hit.el && hit.el.classList.contains('voxel')) {
-            this.highlightBox.object3D.position.copy(hit.el.object3D.position);
-            this.highlightBox.object3D.visible = true;
+          if (hit && hit.el) {
+            if (hit.el.classList.contains('voxel')) {
+              // Highlighting a block
+              this.highlightBox.object3D.position.copy(hit.el.object3D.position);
+              this.highlightBox.object3D.scale.set(1.03, 1.03, 1.03);
+              this.highlightBox.object3D.visible = true;
+            } else if (hit.el.classList.contains('ground')) {
+              // Highlighting empty grid space on the bedrock
+              const targetX = Math.round(hit.point.x + (hit.face.normal.x * 0.5));
+              const targetY = Math.round(hit.point.y + (hit.face.normal.y * 0.5));
+              const targetZ = Math.round(hit.point.z + (hit.face.normal.z * 0.5));
+              this.highlightBox.object3D.position.set(targetX, targetY, targetZ);
+              this.highlightBox.object3D.scale.set(1, 1, 1);
+              this.highlightBox.object3D.visible = true;
+            } else {
+              this.highlightBox.object3D.visible = false;
+            }
           } else {
             this.highlightBox.object3D.visible = false;
           }
@@ -224,7 +254,7 @@
     </script>
   </head>
   <body>
-    <a-scene fog="type: linear; color: #A0C4DF; near: 8; far: 15">
+    <a-scene fog="type: linear; color: #A0C4DF; near: 8; far: 20">
       <a-sky color="#A0C4DF"></a-sky>
 
       <a-entity position="0 0 -5" day-night-cycle>
@@ -237,10 +267,11 @@
       <a-entity id="rig" position="0 1 0">
         <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
         
-        <a-entity id="left-hand" oculus-touch-controls="hand: left; model: false;" vr-controls></a-entity>
+        <a-entity id="left-hand" oculus-touch-controls="hand: left; model: false;" thumbstick-movement></a-entity>
         
         <a-entity id="right-hand" oculus-touch-controls="hand: right; model: false;" 
-                  raycaster="objects: .voxel; far: 6; showLine: true; lineColor: #ffaa00;" 
+                  thumbstick-turn
+                  raycaster="objects: .voxel, .ground; far: 8; showLine: true; lineColor: #ffaa00;" 
                   miner-hand>
           
           <a-entity position="0 0.08 0.05" rotation="-45 0 0">
@@ -250,12 +281,11 @@
         </a-entity>
       </a-entity>
 
-      <a-plane position="0 -1.05 0" rotation="-90 0 0" width="1000" height="1000" visible="false"></a-plane>
+      <a-plane class="ground" position="0 -1.05 0" rotation="-90 0 0" width="200" height="200" material="color: #2E4B26; roughness: 1.0;"></a-plane>
 
       <a-entity id="world" world-manager>
         <a-box id="highlight-frame" 
                material="color: #00FF66; wireframe: true; shader: flat;" 
-               scale="1.03 1.03 1.03" 
                visible="false">
         </a-box>
       </a-entity>
