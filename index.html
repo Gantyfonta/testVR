@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Magic v3: The Ultimate Duel</title>
+    <title>VR Magic v4: Bob Speaks!</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.1.0/dist/aframe-extras.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
     <script>
-      // WAND ATTACHMENT & CASTER SYSTEM
+      // WAND SYSTEM (Pickup and casting)
       AFRAME.registerComponent('wand-handler', {
         init: function () {
           this.startPos = new THREE.Vector3();
@@ -18,24 +18,19 @@
           this.isHeld = false;
           this.rightController = document.querySelector('#right-hand');
 
-          // Listen for Grip Button to Pick Up / Drop
           this.rightController.addEventListener('gripdown', () => {
             if (!this.isHeld) {
-              // Check distance between hand and wand
               let handPos = new THREE.Vector3();
               this.rightController.object3D.getWorldPosition(handPos);
               let wandPos = new THREE.Vector3();
               this.el.object3D.getWorldPosition(wandPos);
 
-              if (handPos.distanceTo(wandPos) < 1.5) { // Generous pickup radius
-                this.pickUp();
-              }
+              if (handPos.distanceTo(wandPos) < 1.5) { this.pickUp(); }
             } else {
               this.drop();
             }
           });
 
-          // Trigger listeners for casting
           this.rightController.addEventListener('triggerdown', () => {
             if (!this.isHeld) return;
             this.el.object3D.getWorldPosition(this.startPos);
@@ -47,7 +42,6 @@
             this.el.object3D.getWorldPosition(this.endPos);
             this.isTracking = false;
 
-            // Gesture Math
             let dx = this.endPos.x - this.startPos.x;
             let dy = this.endPos.y - this.startPos.y;
             let dz = this.endPos.z - this.startPos.z;
@@ -59,19 +53,12 @@
             let threshold = 0.15;
             let maxMotion = Math.max(absX, absY, absZ);
 
-            // Advanced Gestures
             if (maxMotion > threshold) {
-              if (absX > 0.2 && absY > 0.2) {
-                spellType = "blackhole";   // Diagonal / Circular slash
-              } else if (dy > 0.2 && absX < 0.1) {
-                spellType = "shield";      // Sudden upward flick
-              } else if (maxMotion === absY) {
-                spellType = "fireball";    // Downward slash
-              } else if (maxMotion === absX) {
-                spellType = "frost";       // Horizontal swipe
-              } else if (maxMotion === absZ && dz < 0) {
-                spellType = "lightning";   // Forward stab
-              }
+              if (absX > 0.2 && absY > 0.2) { spellType = "blackhole"; } 
+              else if (dy > 0.2 && absX < 0.1) { spellType = "shield"; } 
+              else if (maxMotion === absY) { spellType = "fireball"; } 
+              else if (maxMotion === absX) { spellType = "frost"; } 
+              else if (maxMotion === absZ && dz < 0) { spellType = "lightning"; }
             }
             this.fireSpell(spellType);
           });
@@ -79,32 +66,26 @@
 
         pickUp: function() {
           this.isHeld = true;
-          // Disable standalone physics while holding
           this.el.removeAttribute('dynamic-body');
-          // Attach wand to the controller entity natively
           this.rightController.appendChild(this.el);
-          // Reset local transform so it sits cleanly in the hand
           this.el.setAttribute('position', '0 0 -0.2');
           this.el.setAttribute('rotation', '0 0 0');
-          document.querySelector('#hud-text').setAttribute('value', 'Wand Equipped! Cast away!');
+          document.querySelector('#hud-text').setAttribute('value', 'Wand Equipped! Defeat Bob!');
         },
 
         drop: function() {
           this.isHeld = false;
           let scene = document.querySelector('a-scene');
-          // Return wand to scene root
           let currentPos = new THREE.Vector3();
           this.el.object3D.getWorldPosition(currentPos);
           scene.appendChild(this.el);
           this.el.setAttribute('position', currentPos);
-          // Re-enable physics so it rests on floor
           this.el.setAttribute('dynamic-body', 'shape: box; mass: 0.5');
         },
 
         fireSpell: function (type) {
           let scene = document.querySelector('a-scene');
           let spell = document.createElement('a-entity');
-          
           let tip = document.querySelector('#wand-tip');
           let tipPos = new THREE.Vector3();
           tip.object3D.getWorldPosition(tipPos);
@@ -113,17 +94,13 @@
           this.el.object3D.getWorldDirection(this.wandDirection);
           this.wandDirection.multiplyScalar(-1); 
 
-          let color = '#ff4500';
-          let velocity = 15;
-          let radius = 0.15;
-          let hudName = "🔥 FIREBALL";
+          let color = '#ff4500'; let velocity = 15; let radius = 0.15; let hudName = "🔥 FIREBALL";
 
           if (type === 'frost') { color = '#00bfff'; velocity = 12; radius = 0.1; hudName = "❄️ FROST SHARD"; }
           if (type === 'lightning') { color = '#ffff00'; velocity = 35; radius = 0.04; hudName = "⚡ LIGHTNING BOLT"; }
           if (type === 'blackhole') { color = '#4b0082'; velocity = 6; radius = 0.35; hudName = "🌀 BLACK HOLE"; }
           
           if (type === 'shield') {
-            // Shield spawns in front of player instead of flying
             spell.setAttribute('geometry', 'primitive: box; width: 1.5; height: 1.5; depth: 0.05');
             spell.setAttribute('material', 'color: #00ffff; opacity: 0.6; transparent: true; shader: flat');
             let playerPos = document.querySelector('#rig').object3D.position;
@@ -151,7 +128,7 @@
         }
       });
 
-      // BOB AI - STABILIZED 
+      // BOB BRAIN ENGINE: Attacks, speaks, stays above ground, displays captions
       AFRAME.registerComponent('bob-ai', {
         schema: { health: {type: 'number', default: 100} },
         init: function () {
@@ -159,16 +136,50 @@
           this.healthBar = document.querySelector('#bob-health-bar');
           this.lastShotTime = 0;
           this.isDead = false;
+          this.captionTimeout = null;
+
+          // Sound pools
+          this.hitLines = ["Ouch!", "Hey! That hurt!", "Is that all you got?", "Insolent wizard!"];
+          this.attackLines = ["Take this!", "Feel the power of Bob!", "Flee before me!", "Alakazam!"];
+
+          // Introduction greeting once game fully initializes
+          setTimeout(() => { this.speak("Who dares disturb the great dummy Bob? Prepare to duel!"); }, 2000);
 
           this.el.addEventListener('collide', (evt) => {
             if(this.isDead) return;
             const hitObj = evt.detail.body.el;
             if (hitObj && hitObj.classList.contains('player-spell')) {
-               let dmg = hitObj.getAttribute('geometry').primitive === 'sphere' && hitObj.getAttribute('geometry').radius > 0.3 ? 30 : 10;
-               this.takeDamage(dmg);
+               let isLarge = hitObj.getAttribute('geometry').radius > 0.3;
+               this.takeDamage(isLarge ? 30 : 10);
                hitObj.remove();
+               
+               if(!this.isDead) {
+                 let randomLine = this.hitLines[Math.floor(Math.random() * this.hitLines.length)];
+                 this.speak(randomLine);
+               }
             }
           });
+        },
+
+        speak: function(text) {
+          // 1. Text-to-Speech (Runs directly inside Oculus Browser)
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel(); // Stop prior talking
+            let utterance = new SpeechSynthesisUtterance(text);
+            utterance.pitch = 0.5; // Make Bob sound deep and menacing
+            utterance.rate = 0.85;
+            window.speechSynthesis.speak(utterance);
+          }
+
+          // 2. Accessibility Captions (Floating 3D text box)
+          let captionEl = document.querySelector('#bob-captions');
+          captionEl.setAttribute('value', `BOB: "${text}"`);
+          captionEl.setAttribute('visible', 'true');
+
+          clearTimeout(this.captionTimeout);
+          this.captionTimeout = setTimeout(() => {
+            captionEl.setAttribute('visible', 'false');
+          }, 3500);
         },
 
         takeDamage: function(amount) {
@@ -179,19 +190,24 @@
 
         die: function() {
           this.isDead = true;
-          // When dead, remove the upright constraints so he completely falls over defeated
-          this.el.setAttribute('dynamic-body', 'mass: 5'); 
-          document.querySelector('#hud-text').setAttribute('value', 'BOB IS DEFEATED!');
+          // FIX: Instead of giving him dynamic physics (which causes falling through floors),
+          // we remove his physics shell entirely and cleanly animate his model collapsing backwards.
+          this.el.removeAttribute('dynamic-body'); 
+          this.el.setAttribute('animation', 'property: rotation; to: -90 0 0; dur: 1200; easing: easeOutBounce');
+          
+          this.speak("Noooo! Defeated by a mortal... goodbye world.");
+          document.querySelector('#hud-text').setAttribute('value', 'BOB DEFEATED!');
         },
 
         tick: function (time, timeDelta) {
           if (this.isDead) return;
 
-          // Keep Bob locked facing the player on the Y axis
+          // Face the player on the floor axis
           let playerPos = this.playerRig.object3D.position;
           this.el.object3D.lookAt(playerPos.x, 1.5, playerPos.z);
 
-          if (time - this.lastShotTime > 3500) {
+          // Shoot every 4 seconds
+          if (time - this.lastShotTime > 4000) {
             this.shootAtPlayer();
             this.lastShotTime = time;
           }
@@ -205,20 +221,21 @@
           enemySpell.setAttribute('position', {x: bobPos.x, y: 1.5, z: bobPos.z});
           enemySpell.setAttribute('geometry', 'primitive: sphere; radius: 0.18');
           enemySpell.setAttribute('material', 'color: #ff0000; shader: flat; emissive: red');
-          enemySpell.setAttribute('class', 'bob-spell');
 
           let pPos = this.playerRig.object3D.position;
           enemySpell.setAttribute('animation', `property: position; to: ${pPos.x} ${pPos.y} ${pPos.z}; dur: 2200; easing: linear`);
 
-          // Collision check against player or shield
+          // Call out attack
+          let randomAttack = this.attackLines[Math.floor(Math.random() * this.attackLines.length)];
+          this.speak(randomAttack);
+
+          // Check for shield intersections
           enemySpell.addEventListener('componentchanged', (evt) => {
              if (evt.detail.name === 'position') {
                 let shields = document.querySelectorAll('.player-shield');
                 shields.forEach(shield => {
                    let sPos = shield.object3D.position;
-                   if(enemySpell.object3D.position.distanceTo(sPos) < 0.8) {
-                      enemySpell.remove(); // Shield absorbed it!
-                   }
+                   if(enemySpell.object3D.position.distanceTo(sPos) < 0.8) { enemySpell.remove(); }
                 });
              }
           });
@@ -239,7 +256,7 @@
       </a-entity>
 
       <a-entity position="0 3.2 0">
-        <a-text id="hud-text" value="Walk up to the wand and click GRIP to equip!" align="center" color="#00ffcc" width="2.5"></a-text>
+        <a-text id="hud-text" value="Grab the wand (GRIP). Hold TRIGGER + Gesture to cast spells." align="center" color="#00ffcc" width="2.5"></a-text>
       </a-entity>
 
       <a-entity id="wand" position="0.5 0.1 2" rotation="0 45 0" wand-handler dynamic-body="shape: box; mass: 0.5">
@@ -248,9 +265,13 @@
         </a-cylinder>
       </a-entity>
 
-      <a-entity id="bob" position="0 0 -4" bob-ai dynamic-body="shape: cylinder; mass: 1000; angularFactor: 0 0 0">
+      <a-entity id="bob" position="0 0.05 -4" bob-ai dynamic-body="shape: cylinder; mass: 1000; angularFactor: 0 0 0">
+        
+        <a-text id="bob-captions" value="" align="center" color="#ffffff" bgcolor="#000000" width="3" position="0 3 0" visible="false"></a-text>
+
         <a-plane position="0 2.5 0" width="1" height="0.1" color="red"></a-plane>
         <a-plane id="bob-health-bar" position="0 2.5 0.01" width="1" height="0.1" color="lime" anchor="left"></a-plane>
+        
         <a-cylinder position="0 0.1 0" radius="0.4" height="0.2" color="#555"></a-cylinder>
         <a-cylinder position="0 0.7 0" radius="0.05" height="1.2" color="#333"></a-cylinder>
         <a-cylinder id="dummy-body" position="0 1.5 0" radius="0.25" height="1.0" color="#d2b48c">
@@ -259,7 +280,8 @@
         <a-sphere position="0 2.1 0" radius="0.2" color="#c19a6b"></a-sphere>
       </a-entity>
 
-      <a-plane static-body rotation="-90 0 0" width="100" height="100" visible="false"></a-plane>
+      <a-box static-body position="0 -0.5 0" width="100" height="1" depth="100" visible="false"></a-box>
+
     </a-scene>
   </body>
 </html>
