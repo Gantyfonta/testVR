@@ -1,9 +1,8 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Voxel Engine v2</title>
+    <title>VR Sandbox Minecraft - Fixed</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.1.0/dist/aframe-extras.min.js"></script>
 
     <script>
       // SANDBOX DESIGN SYSTEM CONFIGURATION
@@ -13,18 +12,51 @@
         { id: 'stone', color: '#73777B', name: '🪨 Stone' }
       ];
 
-      // 16x16 MATRIX BOUNDARIES 
-      const WORLD_BOUNDS = { minX: -8, maxX: 7, minZ: -12, maxZ: 3, minY: -2, maxY: 8 };
+      // PERFECTLY SIZED 14x14 MATRIX FOR HIGH HEADSET PERFORMANCE
+      const WORLD_BOUNDS = { minX: -7, maxX: 6, minZ: -12, maxZ: 1, minY: -2, maxY: 6 };
 
-      // CENTRAL WORLD ARCHITECT
+      // NATIVE LIGHTWEIGHT THUMBSTICK LOCOMOTION ENGINE (Replaces aframe-extras)
+      AFRAME.registerComponent('vr-controls', {
+        init: function () {
+          this.joyX = 0;
+          this.joyY = 0;
+          this.moveSpeed = 0.06; // Adjust walking speed here
+
+          // Listen for live thumbstick movements
+          this.el.addEventListener('axismove', (evt) => {
+            this.joyX = evt.detail.axis[0] || 0;
+            this.joyY = evt.detail.axis[1] || 0;
+          });
+        },
+        tick: function () {
+          // Deadzone calculation to prevent thumbstick drift
+          if (Math.abs(this.joyX) < 0.15 && Math.abs(this.joyY) < 0.15) return;
+
+          let rig = document.querySelector('#rig');
+          let cam = document.querySelector('a-camera');
+          
+          let direction = new THREE.Vector3();
+          cam.object3D.getWorldDirection(direction);
+          direction.y = 0; // Lock movement to horizontal ground plane
+          direction.normalize();
+
+          let sideDirection = new THREE.Vector3();
+          sideDirection.copy(direction).applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+
+          // Apply vector transformations to our camera rig position
+          rig.object3D.position.addScaledVector(direction, -this.joyY * this.moveSpeed);
+          rig.object3D.position.addScaledVector(sideDirection, this.joyX * this.moveSpeed);
+        }
+      });
+
+      // CENTRAL WORLD ARCHITECT (Optimized with memory-batching)
       AFRAME.registerComponent('world-manager', {
         init: function () {
           this.worldData = {}; 
           this.selectedBlockIndex = 0;
           this.hudText = document.querySelector('#hud-text');
 
-          // Local Storage Verification Loop
-          const savedWorld = localStorage.getItem('vr_sandbox_save_v2');
+          const savedWorld = localStorage.getItem('vr_sandbox_save_v3');
           if (savedWorld) {
             this.worldData = JSON.parse(savedWorld);
             this.renderWorld();
@@ -41,11 +73,10 @@
         },
 
         generateProceduralSandbox: function() {
-          // Generate a strict 16x16 grid utilizing two core layers
           for (let x = WORLD_BOUNDS.minX; x <= WORLD_BOUNDS.maxX; x++) {
             for (let z = WORLD_BOUNDS.minZ; z <= WORLD_BOUNDS.maxZ; z++) {
-              this.worldData[`${x},-1,${z}`] = 1; // Base Layer: Dirt
-              this.worldData[`${x},0,${z}`] = 0;  // Top Layer: Grass
+              this.worldData[`${x},-1,${z}`] = 1; // Base: Dirt
+              this.worldData[`${x},0,${z}`] = 0;  // Top: Grass
             }
           }
           this.renderWorld();
@@ -56,53 +87,58 @@
           const existingBlocks = document.querySelectorAll('.voxel');
           existingBlocks.forEach(b => b.parentNode.removeChild(b));
 
+          // FIX: Use a DocumentFragment memory-buffer to batch all additions at once
+          const fragment = document.createDocumentFragment();
+
           Object.keys(this.worldData).forEach(key => {
             const [x, y, z] = key.split(',').map(Number);
             const blockTypeIdx = this.worldData[key];
-            this.spawnBlockEntity(x, y, z, blockTypeIdx);
+            
+            const blockInfo = BLOCK_TYPES[blockTypeIdx];
+            if (blockInfo) {
+              let box = document.createElement('a-box');
+              box.setAttribute('class', 'voxel');
+              box.setAttribute('position', `${x} ${y} ${z}`);
+              box.setAttribute('width', '1');
+              box.setAttribute('height', '1');
+              box.setAttribute('depth', '1');
+              box.setAttribute('material', `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`);
+              box.dataset.gridPos = `${x},${y},${z}`;
+              fragment.appendChild(box);
+            }
           });
-        },
 
-        spawnBlockEntity: function(x, y, z, typeIdx) {
-          const blockInfo = BLOCK_TYPES[typeIdx];
-          if (!blockInfo) return;
-
-          let box = document.createElement('a-box');
-          box.setAttribute('class', 'voxel');
-          box.setAttribute('position', `${x} ${y} ${z}`);
-          box.setAttribute('width', '1');
-          box.setAttribute('height', '1');
-          box.setAttribute('depth', '1');
-          box.setAttribute('material', `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`);
-          box.dataset.gridPos = `${x},${y},${z}`;
-
-          this.el.appendChild(box);
+          // Single atomic DOM insert pass (prevents layout crashing)
+          this.el.appendChild(fragment);
         },
 
         addBlockAtIntersection: function(intersection) {
           const currentBlockPos = intersection.el.object3D.position;
           const normal = intersection.face.normal;
 
-          // Compute absolute grid positioning coordinates
           const newX = Math.round(currentBlockPos.x + normal.x);
           const newY = Math.round(currentBlockPos.y + normal.y);
           const newZ = Math.round(currentBlockPos.z + normal.z);
           const newKey = `${newX},${newY},${newZ}`;
 
-          // PLACEMENT VALIDATION SECURITY GUARDRAILS
+          // Perimeter boundary checks
           if (newX < WORLD_BOUNDS.minX || newX > WORLD_BOUNDS.maxX ||
               newZ < WORLD_BOUNDS.minZ || newZ > WORLD_BOUNDS.maxZ ||
-              newY < WORLD_BOUNDS.minY || newY > WORLD_BOUNDS.maxY) {
-            return; // Enforce 16x16 perimeter boundaries
-          }
+              newY < WORLD_BOUNDS.minY || newY > WORLD_BOUNDS.maxY) return;
 
-          if (this.worldData[newKey] !== undefined) {
-            return; // Block overlapping coordinate collision validation
-          }
+          // Double space occupancy validation pass
+          if (this.worldData[newKey] !== undefined) return;
 
-          // Write block data to map index
           this.worldData[newKey] = this.selectedBlockIndex;
-          this.spawnBlockEntity(newX, newY, newZ, this.selectedBlockIndex);
+          
+          // Fast localized item generation
+          let box = document.createElement('a-box');
+          box.setAttribute('class', 'voxel');
+          box.setAttribute('position', `${newX} ${newY} ${newZ}`);
+          box.setAttribute('material', `color: ${BLOCK_TYPES[this.selectedBlockIndex].color}; roughness: 1.0; flatShading: true;`);
+          box.dataset.gridPos = newKey;
+          this.el.appendChild(box);
+
           this.saveWorld();
         },
 
@@ -116,7 +152,7 @@
         },
 
         saveWorld: function() {
-          localStorage.setItem('vr_sandbox_save_v2', JSON.stringify(this.worldData));
+          localStorage.setItem('vr_sandbox_save_v3', JSON.stringify(this.worldData));
         },
 
         updateHUD: function() {
@@ -126,25 +162,22 @@
         }
       });
 
-      // TARGET DETECTOR & HIGHLIGHT MANAGER
+      // TARGET DETECTOR
       AFRAME.registerComponent('miner-hand', {
         init: function () {
           this.worldManager = document.querySelector('#world').components['world-manager'];
           this.highlightBox = document.querySelector('#highlight-frame');
 
-          // Destruction Event Trigger
           this.el.addEventListener('triggerdown', () => {
             const hit = this.getIntersection();
             if (hit) this.worldManager.removeBlockEntity(hit.el);
           });
 
-          // Placement Event Trigger
           this.el.addEventListener('gripdown', () => {
             const hit = this.getIntersection();
             if (hit) this.worldManager.addBlockAtIntersection(hit);
           });
 
-          // Inventory Toggle Hook
           this.el.addEventListener('abuttondown', () => {
             document.querySelector('#world').emit('cycle-block');
           });
@@ -158,7 +191,6 @@
           return null;
         },
 
-        // Real-Time Wireframe Highlight Rendering Loop
         tick: function() {
           const hit = this.getIntersection();
           if (hit && hit.el.classList.contains('voxel')) {
@@ -173,39 +205,39 @@
     </script>
   </head>
   <body>
-    <a-scene fog="type: linear; color: #A0C4DF; near: 10; far: 18">
+    <a-scene fog="type: linear; color: #A0C4DF; near: 8; far: 15">
       
       <a-sky color="#A0C4DF"></a-sky>
 
-      <a-entity position="0 0 -4" animation="property: rotation; to: 360 0 0; loop: true; dur: 90000; easing: linear">
-        <a-entity light="type: directional; intensity: 0.8; color: #FFFDF0;" position="0 25 0"></a-entity>
-        <a-entity light="type: directional; intensity: 0.2; color: #334466;" position="0 -25 0"></a-entity>
+      <a-entity position="0 0 -5" animation="property: rotation; to: 360 0 0; loop: true; dur: 120000; easing: linear">
+        <a-entity light="type: directional; intensity: 0.8; color: #FFFDF0;" position="0 20 0"></a-entity>
+        <a-entity light="type: directional; intensity: 0.15; color: #334466;" position="0 -20 0"></a-entity>
       </a-entity>
       
-      <a-entity light="type: ambient; intensity: 0.4; color: #FFFFFF;"></a-entity>
+      <a-entity light="type: ambient; intensity: 0.45; color: #FFFFFF;"></a-entity>
 
-      <a-entity id="rig" movement-controls="controls: gamepad; speed: 0.15" position="0 1 0">
+      <a-entity id="rig" position="0 1 0">
         <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
         
-        <a-entity oculus-touch-controls="hand: left"></a-entity>
+        <a-entity id="left-hand" oculus-touch-controls="hand: left" vr-controls></a-entity>
         
         <a-entity id="right-hand" oculus-touch-controls="hand: right" 
-                  raycaster="objects: .voxel; far: 7; showLine: true; lineColor: #ffa500;" 
+                  raycaster="objects: .voxel; far: 6; showLine: true; lineColor: #ffaa00;" 
                   miner-hand>
           
           <a-entity position="0 0.08 0.05" rotation="-45 0 0">
-            <a-plane width="0.22; " height="0.08" color="#111" opacity="0.9"></a-plane>
+            <a-plane width="0.22" height="0.08" color="#111" opacity="0.9"></a-plane>
             <a-text id="hud-text" value="" align="center" color="#00FFCC" width="0.9" position="0 0 0.01"></a-text>
           </a-entity>
         </a-entity>
       </a-entity>
 
-      <a-plane position="0 -1.05 0" rotation="-90 0 0" width="5000" height="5000" visible="false"></a-plane>
+      <a-plane position="0 -1.05 0" rotation="-90 0 0" width="1000" height="1000" visible="false"></a-plane>
 
       <a-entity id="world" world-manager>
         <a-box id="highlight-frame" 
-               material="color: #00FF66; wireframe: true; wireframeLineWidth: 4; shader: flat;" 
-               scale="1.02 1.02 1.02" 
+               material="color: #00FF66; wireframe: true; shader: flat;" 
+               scale="1.03 1.03 1.03" 
                visible="false">
         </a-box>
       </a-entity>
