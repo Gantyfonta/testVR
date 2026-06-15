@@ -1,166 +1,245 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Magic Wand Training</title>
+    <title>VR Magic v2: Fight Bob!</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
-    
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.1.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
+    <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
+
     <script>
-      // GESTURE ENGINE & SPELL CASTER
+      // 1. RE-WRITE GESTURE/SHOOTING ENGINE TO USE PHYSICS & DIRECTION
       AFRAME.registerComponent('wand-caster', {
         init: function () {
           this.startPos = new THREE.Vector3();
           this.endPos = new THREE.Vector3();
+          this.wandDirection = new THREE.Vector3();
           this.isTracking = false;
 
-          // Bind event listeners for the Quest controller trigger
-          this.el.addEventListener('triggerdown', () => {
-            this.el.object3D.getWorldPosition(this.startPos);
-            this.isTracking = true;
+          // Note: Using 'triggerdown' on the controller entity that holds this wand via super-hands
+          this.el.addEventListener('grab-start', (evt) => {
+             // Identify which hand grabbed it
+             this.grabbingHand = evt.detail.hand;
+             // Set up listener on that specific controller
+             this.grabbingHand.addEventListener('triggerdown', this.onTriggerDown.bind(this));
+             this.grabbingHand.addEventListener('triggerup', this.onTriggerUp.bind(this));
           });
 
-          this.el.addEventListener('triggerup', () => {
+          this.el.addEventListener('grab-end', (evt) => {
+             if(this.grabbingHand) {
+                this.grabbingHand.removeEventListener('triggerdown', this.onTriggerDown.bind(this));
+                this.grabbingHand.removeEventListener('triggerup', this.onTriggerUp.bind(this));
+             }
+             this.grabbingHand = null;
+          });
+        },
+
+        onTriggerDown: function() {
+            this.el.object3D.getWorldPosition(this.startPos);
+            this.isTracking = true;
+        },
+
+        onTriggerUp: function() {
             if (!this.isTracking) return;
             this.el.object3D.getWorldPosition(this.endPos);
             this.isTracking = false;
 
-            // Calculate motion vectors
+            // Gesture Math
             let dx = this.endPos.x - this.startPos.x;
             let dy = this.endPos.y - this.startPos.y;
             let dz = this.endPos.z - this.startPos.z;
-
             let absX = Math.abs(dx);
             let absY = Math.abs(dy);
             let absZ = Math.abs(dz);
 
-            let spellType = "spark"; // Default fallback
-            let threshold = 0.15;    // Minimum movement meters to trigger a spell
+            let spellType = "fireball"; 
+            let motionThreshold = 0.15;
             let maxMotion = Math.max(absX, absY, absZ);
 
-            if (maxMotion > threshold) {
+            if (maxMotion > motionThreshold) {
               if (maxMotion === absY) {
-                spellType = "fireball";   // Vertical slash down/up
+                spellType = "fireball";
               } else if (maxMotion === absX) {
-                spellType = "frost";      // Horizontal swipe left/right
+                spellType = "frost";
               } else if (maxMotion === absZ && dz < 0) {
-                spellType = "lightning";  // Sharp thrust forward
+                spellType = "lightning";
               }
             }
-
-            this.castSpell(spellType);
-          });
+            this.fireDirectedSpell(spellType);
         },
 
-        castSpell: function (type) {
+        fireDirectedSpell: function (type) {
           let scene = document.querySelector('a-scene');
-          let projectile = document.createElement('a-entity');
+          let spell = document.createElement('a-entity');
           
-          // Get current wand tip position
-          let wandPos = new THREE.Vector3();
-          this.el.object3D.getWorldPosition(wandPos);
-          projectile.setAttribute('position', wandPos);
+          // A. Get Position of Wand Tip
+          let tip = document.querySelector('#wand-tip');
+          let tipPos = new THREE.Vector3();
+          tip.object3D.getWorldPosition(tipPos);
+          spell.setAttribute('position', tipPos);
 
-          let color = '#ffffff';
-          let spellName = 'Fizzled Spark';
-          let geometry = 'primitive: sphere; radius: 0.08';
+          // B. Get Direction Wand is facing (negative Z axis of wand)
+          this.el.object3D.getWorldDirection(this.wandDirection);
+          this.wandDirection.multiplyScalar(-1); // Reverse it because forward is negative Z
 
-          // Define spells based on motion
-          if (type === 'fireball') {
-            color = '#ff4500';
-            spellName = '🔥 FIREBALL!';
-            geometry = 'primitive: sphere; radius: 0.25';
-          } else if (type === 'frost') {
-            color = '#00bfff';
-            spellName = '❄️ FROST SHARD!';
-            geometry = 'primitive: cone; radiusBottom: 0.1; height: 0.5; rotation: 90 0 0';
-          } else if (type === 'lightning') {
-            color = '#ffff00';
-            spellName = '⚡ LIGHTNING BOLT!';
-            geometry = 'primitive: cylinder; radius: 0.03; height: 0.8; rotation: 90 0 0';
-          }
+          // Setup spell appearance/stats
+          let color = '#ff4500';
+          let velocity = 15; // Meters per second
+          let radius = 0.15;
 
-          projectile.setAttribute('geometry', geometry);
-          projectile.setAttribute('material', `color: ${color}; shader: flat; emissive: ${color}`);
+          if (type === 'frost') { color = '#00bfff'; velocity = 10; radius = 0.1; }
+          if (type === 'lightning') { color = '#ffff00'; velocity = 30; radius = 0.05; }
 
-          // Update HUD Text
-          document.querySelector('#hud-text').setAttribute('value', spellName);
-
-          // Fly toward the dummy (located at 0, 1.5, -5)
-          projectile.setAttribute('animation', {
-            property: 'position',
-            to: '0 1.5 -5',
-            dur: 600,
-            easing: 'linear'
+          spell.setAttribute('geometry', `primitive: sphere; radius: ${radius}`);
+          spell.setAttribute('material', `color: ${color}; shader: flat; emissive: ${color}`);
+          
+          // C. Add Physics (dynamic body, setting initial velocity in aim direction)
+          spell.setAttribute('dynamic-body', 'shape: sphere; mass: 0.1');
+          
+          // Set velocity logic after physics initializes
+          spell.addEventListener('body-loaded', () => {
+             let v = this.wandDirection.multiplyScalar(velocity);
+             spell.body.velocity.set(v.x, v.y, v.z);
           });
 
-          scene.appendChild(projectile);
+          // D. Tag for collision with Bob
+          spell.setAttribute('class', 'player-spell');
 
-          // Impact detection when projectile arrives at the dummy
-          setTimeout(() => {
-            projectile.remove();
-            document.querySelector('#dummy').emit('hit', { spell: type });
-          }, 600);
+          scene.appendChild(spell);
+
+          // Clean up spell after 3 seconds so scene doesn't lag
+          setTimeout(() => { spell.remove(); }, 3000);
         }
       });
 
-      // TRAINING DUMMY REACTION LOGIC
-      AFRAME.registerComponent('dummy-reactor', {
+      // 2. BOB AI: He looks at you, shoots back, and can be hurt.
+      AFRAME.registerComponent('bob-ai', {
+        schema: {
+          health: {type: 'number', default: 100}
+        },
         init: function () {
-          let el = this.el;
-          let dummyBody = el.querySelector('#dummy-body');
+          this.playerRig = document.querySelector('#rig');
+          this.healthBar = document.querySelector('#bob-health-bar');
+          this.lastShotTime = 0;
+          this.isDead = false;
 
-          el.addEventListener('hit', (e) => {
-            let spell = e.detail.spell;
-            let reactionColor = '#ffffff';
-
-            if (spell === 'fireball') reactionColor = '#ff4500';
-            if (spell === 'frost') reactionColor = '#00bfff';
-            if (spell === 'lightning') reactionColor = '#ffff00';
-
-            // Flash spell color
-            dummyBody.setAttribute('color', reactionColor);
-            
-            // Trigger the wobble animation
-            el.emit('wobble');
-
-            // Reset dummy color after a brief moment
-            setTimeout(() => {
-              dummyBody.setAttribute('color', '#d2b48c');
-            }, 300);
+          // Listen for collisions with player spells
+          this.el.addEventListener('collide', (evt) => {
+            if(this.isDead) return;
+            const hitObj = evt.detail.body.el;
+            if (hitObj && hitObj.classList.contains('player-spell')) {
+               this.takeDamage(10);
+               hitObj.remove(); // Destroy spell on impact
+            }
           });
+        },
+
+        takeDamage: function(amount) {
+          this.data.health -= amount;
+          if (this.data.health <= 0) {
+            this.data.health = 0;
+            this.die();
+          }
+          // Update Health Bar Visual (scale X)
+          this.healthBar.setAttribute('scale', `${this.data.health / 100} 1 1`);
+        },
+
+        die: function() {
+          this.isDead = true;
+          this.el.setAttribute('animation', 'property: rotation; to: 90 0 0; dur: 1000; easing: easeOutBounce');
+          document.querySelector('#hud-text').setAttribute('value', 'BOB DEFEATED!');
+        },
+
+        tick: function (time, timeDelta) {
+          if (this.isDead) return;
+
+          // A. Always Look at Player (rotate Y only)
+          let playerPos = this.playerRig.object3D.position;
+          this.el.object3D.lookAt(playerPos.x, 1.5, playerPos.z);
+
+          // B. Attack every 4 seconds
+          if (time - this.lastShotTime > 4000) {
+            this.shootAtPlayer();
+            this.lastShotTime = time;
+          }
+        },
+
+        shootAtPlayer: function() {
+          let scene = document.querySelector('a-scene');
+          let enemySpell = document.createElement('a-entity');
+          
+          // Set starting position at Bob's chest
+          let bobPos = this.el.object3D.position;
+          enemySpell.setAttribute('position', {x: bobPos.x, y: 1.5, z: bobPos.z});
+          enemySpell.setAttribute('geometry', 'primitive: sphere; radius: 0.2');
+          enemySpell.setAttribute('material', 'color: #ff0000; shader: flat; emissive: red');
+          
+          // Use animation to shoot directly at player current pos (easy collision-less mode)
+          let pPos = this.playerRig.object3D.position;
+          enemySpell.setAttribute('animation', `
+            property: position; 
+            to: ${pPos.x} ${pPos.y} ${pPos.z}; 
+            dur: 2000; 
+            easing: linear
+          `);
+
+          scene.appendChild(enemySpell);
+
+          // Check if player gets hit (very simplistic distance check upon animation end)
+          setTimeout(() => {
+            let currentPlayerPos = this.playerRig.object3D.position;
+            let finalSpellPos = enemySpell.object3D.position;
+            if(finalSpellPos.distanceTo(currentPlayerPos) < 1.0) {
+              document.querySelector('#hud-text').setAttribute('value', 'OUCH! Bob hit you!');
+              // Flash screen red or reduce player health here if desired
+            }
+            enemySpell.remove();
+          }, 2000);
         }
       });
     </script>
   </head>
   <body>
-    <a-scene environment="preset: osiris; lighting: point">
+    <a-scene environment="preset: threetowers; lighting: point" physics="driver: local; gravity: -9.8; debug: false">
       
-      <a-entity id="rig">
-        <a-camera position="0 1.6 0"></a-camera>
+      <a-entity id="rig" movement-controls="controls: gamepad; speed: 0.2" position="0 0 5">
+        <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
         
-        <a-entity oculus-touch-controls="hand: right" wand-caster>
-          <a-cylinder position="0 0 -0.2" rotation="90 0 0" radius="0.015" height="0.4" color="#4a2c11">
-            <a-sphere position="0 0.2 0" radius="0.025" color="#9370db" material="shader: flat;"></a-sphere>
-          </a-cylinder>
+        <a-entity oculus-touch-controls="hand: left"></a-entity>
+        
+        <a-entity oculus-touch-controls="hand: right" 
+                  sphere-collider="objects: .grabbable" 
+                  super-hands="grabStartButtons: gripdown; grabEndButtons: gripup">
         </a-entity>
       </a-entity>
 
-      <a-entity position="0 3.5 -4.5">
-        <a-text value="SPELLBOOK" align="center" color="#ffffff" width="5" position="0 0.5 0"></a-text>
-        <a-text value="Vertical Slash -> Fireball\nHorizontal Swipe -> Frost Shard\nForward Thrust -> Lightning" align="center" color="#aaaaaa" width="3.5"></a-text>
-        <a-text id="hud-text" value="Ready your wand..." align="center" color="#00ffcc" width="6" position="0 -0.6 0"></a-text>
+      <a-entity position="0 3.5 -1">
+        <a-text value="FIGHT BOB" align="center" color="#ffffff" width="4" position="0 0.5 0"></a-text>
+        <a-text id="hud-text" value="Grab the wand on the floor (Grip). Aim. Trigger & Gesture to fight." align="center" color="#00ffcc" width="3" position="0 -0.2 0"></a-text>
       </a-entity>
 
-      <a-entity id="dummy" position="0 0 -5" dummy-reactor
-                animation="property: rotation; to: 0 0 10; from: 0 0 -10; dir: alternate; loop: 2; startEvents: wobble; dur: 100">
-        
-        <a-cylinder position="0 0.1 0" radius="0.4" height="0.2" color="#555"></a-cylinder>
-        <a-pole position="0 0.7 0" geometry="primitive: cylinder; radius: 0.05; height: 1.2" material="color: #333"></a-pole>
-        
-        <a-cylinder id="dummy-body" position="0 1.5 0" radius="0.25" height="1.0" color="#d2b48c"></a-cylinder>
-        <a-sphere position="0 2.1 0" radius="0.2" color="#c19a6b"></a-sphere>
-        <a-ring position="0 1.6 0.26" radius-inner="0.1" radius-outer="0.15" color="#8b0000"></a-ring>
+      <a-entity id="wand" class="grabbable" position="1 0.1 3" rotation="0 90 90" 
+                wand-caster dynamic-body="shape: box; mass: 0.5">
+        <a-cylinder rotation="90 0 0" radius="0.015" height="0.4" color="#4a2c11">
+          <a-sphere id="wand-tip" position="0 0.2 0" radius="0.025" color="#9370db" material="shader: flat;"></a-sphere>
+        </a-cylinder>
       </a-entity>
+
+      <a-entity id="bob" position="0 0 -5" bob-ai static-body="shape: cylinder; radius: 0.4; height: 2.2">
+        
+        <a-plane position="0 2.8 0" width="1" height="0.1" color="red"></a-plane>
+        <a-plane id="bob-health-bar" position="0 2.8 0.01" width="1" height="0.1" color="lime" anchor="left"></a-plane>
+
+        <a-cylinder position="0 0.1 0" radius="0.4" height="0.2" color="#555"></a-cylinder>
+        <a-cylinder position="0 0.7 0" radius="0.05" height="1.2" color="#333"></a-cylinder>
+        <a-cylinder id="dummy-body" position="0 1.5 0" radius="0.25" height="1.0" color="#d2b48c">
+            <a-cone position="0 0.7 0.25" radius-bottom="0.05" height="0.2" rotation="90 0 0" color="red"></a-cone>
+        </a-cylinder>
+        <a-sphere position="0 2.1 0" radius="0.2" color="#c19a6b"></a-sphere>
+      </a-entity>
+
+      <a-plane static-body rotation="-90 0 0" width="100" height="100" visible="false"></a-plane>
 
     </a-scene>
   </body>
