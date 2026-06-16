@@ -1,19 +1,17 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Engineering Sandbox</title>
+    <title>VR Engineering Sandbox - Universal</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 
     <script>
       // THE TOOLBOX SPAWNER
-      // Point at these floating items and pull the trigger to spawn a copy
       AFRAME.registerComponent('toolbox-item', {
         schema: {
           partType: { type: 'string', default: 'box' },
           color: { type: 'string', default: '#CCC' }
         },
         init: function () {
-          // Add a subtle hover effect
           this.el.addEventListener('raycaster-intersected', () => {
             this.el.setAttribute('scale', '1.2 1.2 1.2');
           });
@@ -24,38 +22,40 @@
       });
 
       // THE LASER GRABBER
-      // Handles pulling items from the toolbox and carrying them
       AFRAME.registerComponent('laser-grabber', {
         init: function () {
           this.carriedEntity = null;
-          this.carryDistance = 2; // How far away the object floats from your hand
+          this.carryDistance = 2; 
           this.targetVector = new THREE.Vector3();
 
-          // When you pull the trigger
-          this.el.addEventListener('triggerdown', () => {
+          // UNIVERSAL GRAB: Listens for VR triggers OR PC mouse clicks
+          const onGrab = () => {
             let hit = this.getIntersection();
             if (!hit) return;
 
-            // 1. If we hit a toolbox item, spawn a NEW machine part
             if (hit.el.classList.contains('toolbox-item')) {
               const partType = hit.el.getAttribute('toolbox-item').partType;
               const color = hit.el.getAttribute('toolbox-item').color;
               this.spawnAndGrabPart(partType, color, hit.point);
             } 
-            // 2. If we hit an existing machine part, pick it back up
             else if (hit.el.classList.contains('machine-part')) {
               this.carriedEntity = hit.el;
-              this.carryDistance = hit.distance; // Keep it at its current distance
+              this.carryDistance = hit.distance; 
             }
-          });
+          };
 
-          // When you release the trigger
-          this.el.addEventListener('triggerup', () => {
+          // UNIVERSAL RELEASE
+          const onRelease = () => {
             if (this.carriedEntity) {
-              // Drop it where it is
               this.carriedEntity = null;
             }
-          });
+          };
+
+          // Map events
+          this.el.addEventListener('mousedown', onGrab);
+          this.el.addEventListener('triggerdown', onGrab); 
+          this.el.addEventListener('mouseup', onRelease);
+          this.el.addEventListener('triggerup', onRelease);
         },
 
         getIntersection: function() {
@@ -67,44 +67,36 @@
         },
 
         spawnAndGrabPart: function(type, color, spawnPoint) {
-          // Create the new part dynamically
           let newPart = document.createElement(`a-${type}`);
           newPart.setAttribute('class', 'machine-part');
           newPart.setAttribute('material', `color: ${color}; roughness: 0.5;`);
           
-          // Set initial dimensions based on type
           if (type === 'box') {
             newPart.setAttribute('width', '0.5');
             newPart.setAttribute('height', '0.5');
             newPart.setAttribute('depth', '0.5');
-          } else if (type === 'cylinder') { // Represents a wheel or gear
+          } else if (type === 'cylinder') { 
             newPart.setAttribute('radius', '0.3');
             newPart.setAttribute('height', '0.2');
-          } else if (type === 'sphere') { // Represents a joint or ball bearing
+          } else if (type === 'sphere') { 
             newPart.setAttribute('radius', '0.25');
           }
 
           newPart.setAttribute('position', spawnPoint);
           document.querySelector('a-scene').appendChild(newPart);
 
-          // Force the raycaster to recognize the new object instantly
           setTimeout(() => {
             this.el.components.raycaster.refreshObjects();
           }, 10);
 
-          // Immediately grab the newly spawned part
           this.carriedEntity = newPart;
-          this.carryDistance = 2; // Pull it to a comfortable distance
+          this.carryDistance = 2; 
         },
 
         tick: function() {
-          // If we are holding something, calculate where the laser pointer ends and move the object there
           if (this.carriedEntity) {
-            // Calculate the point X meters directly in front of the controller
             this.targetVector.set(0, 0, -this.carryDistance);
             this.el.object3D.localToWorld(this.targetVector);
-            
-            // Instantly move the carried entity to the tip of the laser
             this.carriedEntity.object3D.position.copy(this.targetVector);
           }
         }
@@ -112,17 +104,21 @@
     </script>
   </head>
   <body>
-    <a-scene fog="type: exponential; color: #222; density: 0.05">
+    <a-scene fog="type: exponential; color: #222; density: 0.05" cursor="rayOrigin: mouse">
       <a-sky color="#222"></a-sky>
 
       <a-entity light="type: point; intensity: 0.8; distance: 20; color: #FFFDF0;" position="0 4 -2"></a-entity>
       <a-entity light="type: ambient; intensity: 0.3; color: #FFFFFF;"></a-entity>
 
       <a-entity id="rig" position="0 0 0">
-        <a-camera position="0 1.6 0"></a-camera>
-        <a-entity id="left-hand" oculus-touch-controls="hand: left; model: false;"></a-entity>
+        <a-camera position="0 1.6 0">
+          <a-entity raycaster="objects: .toolbox-item, .machine-part; far: 10;" laser-grabber visible="false"></a-entity>
+        </a-camera>
         
-        <a-entity id="right-hand" oculus-touch-controls="hand: right; model: false;" 
+        <a-entity id="left-hand" laser-controls="hand: left"></a-entity>
+        
+        <a-entity id="right-hand" 
+                  laser-controls="hand: right"
                   raycaster="objects: .toolbox-item, .machine-part; far: 10; showLine: true; lineColor: #00FFCC;" 
                   laser-grabber>
         </a-entity>
