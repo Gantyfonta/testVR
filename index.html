@@ -1,294 +1,158 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>VR Voxel Engine - Full Locomotion</title>
+    <title>VR Engineering Sandbox</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
 
     <script>
-      const BLOCK_TYPES = [
-        { id: 'grass', color: '#557a46', name: '🌿 Grass' },
-        { id: 'dirt',  color: '#8b5a2b', name: '🟫 Dirt' },
-        { id: 'stone', color: '#73777B', name: '🪨 Stone' },
-        { id: 'wood',  color: '#5C4033', name: '🪵 Wood' },
-        { id: 'leaves',color: '#228B22', name: '🍃 Leaves' },
-        { id: 'sand',  color: '#EEDC82', name: '🏖️ Sand' },
-        { id: 'brick', color: '#B22222', name: '🧱 Brick' },
-        { id: 'gold',  color: '#FFD700', name: '✨ Gold' },
-        { id: 'obsidian', color: '#1a1a24', name: '🌌 Obsidian' },
-        { id: 'glass', color: '#87CEFA', name: '🪟 Glass', transparent: true, opacity: 0.4 }
-      ];
-
-      const WORLD_BOUNDS = { minX: -20, maxX: 20, minZ: -20, maxZ: 20, minY: -2, maxY: 15 };
-
-      // LEFT HAND: SMOOTH LOCOMOTION
-      AFRAME.registerComponent('thumbstick-movement', {
-        init: function () {
-          this.joyX = 0; this.joyY = 0;
-          this.moveSpeed = 0.08; 
-          this.rig = document.querySelector('#rig');
-          this.cam = document.querySelector('a-camera');
-          this.direction = new THREE.Vector3();
-          this.sideDirection = new THREE.Vector3();
-          this.upAxis = new THREE.Vector3(0, 1, 0);
-
-          this.el.addEventListener('axismove', (evt) => {
-            this.joyX = evt.detail.axis[0] || 0;
-            this.joyY = evt.detail.axis[1] || 0;
-          });
+      // THE TOOLBOX SPAWNER
+      // Point at these floating items and pull the trigger to spawn a copy
+      AFRAME.registerComponent('toolbox-item', {
+        schema: {
+          partType: { type: 'string', default: 'box' },
+          color: { type: 'string', default: '#CCC' }
         },
-        tick: function () {
-          if (Math.abs(this.joyX) < 0.15 && Math.abs(this.joyY) < 0.15) return;
-
-          this.cam.object3D.getWorldDirection(this.direction);
-          this.direction.y = 0; 
-          this.direction.normalize();
-          this.sideDirection.copy(this.direction).applyAxisAngle(this.upAxis, Math.PI / 2);
-
-          this.rig.object3D.position.addScaledVector(this.direction, -this.joyY * this.moveSpeed);
-          this.rig.object3D.position.addScaledVector(this.sideDirection, this.joyX * this.moveSpeed);
-        }
-      });
-
-      // RIGHT HAND: SNAP TURNING
-      AFRAME.registerComponent('thumbstick-turn', {
         init: function () {
-          this.rig = document.querySelector('#rig');
-          this.canTurn = true; 
-
-          this.el.addEventListener('axismove', (evt) => {
-            const joyX = evt.detail.axis[0] || 0;
-            // Activate turn when pushed past threshold
-            if (Math.abs(joyX) > 0.6) {
-              if (this.canTurn) {
-                // Turn 45 Degrees (Math.PI / 4) Left or Right
-                this.rig.object3D.rotation.y += (joyX < 0 ? 1 : -1) * (Math.PI / 4);
-                this.canTurn = false; // Lock until stick returns to center
-              }
-            } else if (Math.abs(joyX) < 0.3) {
-              this.canTurn = true; // Unlock
-            }
+          // Add a subtle hover effect
+          this.el.addEventListener('raycaster-intersected', () => {
+            this.el.setAttribute('scale', '1.2 1.2 1.2');
+          });
+          this.el.addEventListener('raycaster-intersected-cleared', () => {
+            this.el.setAttribute('scale', '1 1 1');
           });
         }
       });
 
-      // WORLD ARCHITECT
-      AFRAME.registerComponent('world-manager', {
+      // THE LASER GRABBER
+      // Handles pulling items from the toolbox and carrying them
+      AFRAME.registerComponent('laser-grabber', {
         init: function () {
-          this.worldData = {}; 
-          this.selectedBlockIndex = 0;
-          this.hudText = document.querySelector('#hud-text');
+          this.carriedEntity = null;
+          this.carryDistance = 2; // How far away the object floats from your hand
+          this.targetVector = new THREE.Vector3();
 
-          const savedWorld = localStorage.getItem('vr_sandbox_save_v6');
-          if (savedWorld) {
-            this.worldData = JSON.parse(savedWorld);
-            this.renderWorld();
-          } else {
-            this.generateProceduralSandbox();
-          }
-          
-          this.updateHUD();
-
-          this.el.addEventListener('cycle-block', () => {
-            this.selectedBlockIndex = (this.selectedBlockIndex + 1) % BLOCK_TYPES.length;
-            this.updateHUD();
-          });
-        },
-
-        generateProceduralSandbox: function() {
-          // Smaller starting patch so you can easily reach the edge and test the infinite bedrock
-          for (let x = -4; x <= 4; x++) {
-            for (let z = -6; z <= -1; z++) {
-              this.worldData[`${x},-1,${z}`] = 1; 
-              this.worldData[`${x},0,${z}`] = 0;  
-            }
-          }
-          this.renderWorld();
-          this.saveWorld();
-        },
-
-        renderWorld: function() {
-          const existingBlocks = document.querySelectorAll('.voxel');
-          existingBlocks.forEach(b => b.parentNode.removeChild(b));
-
-          const fragment = document.createDocumentFragment();
-
-          Object.keys(this.worldData).forEach(key => {
-            const [x, y, z] = key.split(',').map(Number);
-            const blockTypeIdx = this.worldData[key];
-            this.createVoxelNode(x, y, z, blockTypeIdx, fragment);
-          });
-
-          this.el.appendChild(fragment);
-        },
-
-        createVoxelNode: function(x, y, z, typeIdx, parentNode) {
-          const blockInfo = BLOCK_TYPES[typeIdx];
-          if (!blockInfo) return;
-
-          let box = document.createElement('a-box');
-          box.setAttribute('class', 'voxel');
-          box.setAttribute('position', `${x} ${y} ${z}`);
-          
-          let mat = `color: ${blockInfo.color}; roughness: 1.0; flatShading: true;`;
-          if (blockInfo.transparent) {
-            mat += ` transparent: true; opacity: ${blockInfo.opacity};`;
-          }
-          box.setAttribute('material', mat);
-          box.dataset.gridPos = `${x},${y},${z}`;
-          
-          parentNode.appendChild(box);
-        },
-
-        addBlockAtIntersection: function(intersection) {
-          const hitPoint = intersection.point;
-          const normal = intersection.face.normal;
-
-          const newX = Math.round(hitPoint.x + (normal.x * 0.5));
-          const newY = Math.round(hitPoint.y + (normal.y * 0.5));
-          const newZ = Math.round(hitPoint.z + (normal.z * 0.5));
-          const newKey = `${newX},${newY},${newZ}`;
-
-          if (newX < WORLD_BOUNDS.minX || newX > WORLD_BOUNDS.maxX ||
-              newZ < WORLD_BOUNDS.minZ || newZ > WORLD_BOUNDS.maxZ ||
-              newY < WORLD_BOUNDS.minY || newY > WORLD_BOUNDS.maxY) return;
-
-          if (this.worldData[newKey] !== undefined) return;
-
-          this.worldData[newKey] = this.selectedBlockIndex;
-          this.createVoxelNode(newX, newY, newZ, this.selectedBlockIndex, this.el);
-          this.saveWorld();
-
-          setTimeout(() => {
-            document.querySelector('#right-hand').components.raycaster.refreshObjects();
-          }, 10);
-        },
-
-        removeBlockEntity: function(blockEl) {
-          // Prevent deleting the infinite bedrock floor
-          if (blockEl.classList.contains('ground')) return;
-
-          const key = blockEl.dataset.gridPos;
-          if (key && this.worldData[key] !== undefined) {
-            delete this.worldData[key];
-            blockEl.parentNode.removeChild(blockEl);
-            this.saveWorld();
-            
-            setTimeout(() => {
-              document.querySelector('#right-hand').components.raycaster.refreshObjects();
-            }, 10);
-          }
-        },
-
-        saveWorld: function() {
-          localStorage.setItem('vr_sandbox_save_v6', JSON.stringify(this.worldData));
-        },
-
-        updateHUD: function() {
-          if(this.hudText) {
-            this.hudText.setAttribute('value', `ITEM: ${BLOCK_TYPES[this.selectedBlockIndex].name}\nL-Stick: Move\nR-Stick: Turn`);
-          }
-        }
-      });
-
-      // TARGET DETECTOR
-      AFRAME.registerComponent('miner-hand', {
-        init: function () {
-          this.worldManager = document.querySelector('#world').components['world-manager'];
-          this.highlightBox = document.querySelector('#highlight-frame');
-
+          // When you pull the trigger
           this.el.addEventListener('triggerdown', () => {
-            const hit = this.getIntersection();
-            if (hit) this.worldManager.addBlockAtIntersection(hit);
+            let hit = this.getIntersection();
+            if (!hit) return;
+
+            // 1. If we hit a toolbox item, spawn a NEW machine part
+            if (hit.el.classList.contains('toolbox-item')) {
+              const partType = hit.el.getAttribute('toolbox-item').partType;
+              const color = hit.el.getAttribute('toolbox-item').color;
+              this.spawnAndGrabPart(partType, color, hit.point);
+            } 
+            // 2. If we hit an existing machine part, pick it back up
+            else if (hit.el.classList.contains('machine-part')) {
+              this.carriedEntity = hit.el;
+              this.carryDistance = hit.distance; // Keep it at its current distance
+            }
           });
 
-          this.el.addEventListener('gripdown', () => {
-            const hit = this.getIntersection();
-            if (hit && hit.el) this.worldManager.removeBlockEntity(hit.el);
-          });
-
-          this.el.addEventListener('abuttondown', () => {
-            document.querySelector('#world').emit('cycle-block');
+          // When you release the trigger
+          this.el.addEventListener('triggerup', () => {
+            if (this.carriedEntity) {
+              // Drop it where it is
+              this.carriedEntity = null;
+            }
           });
         },
 
         getIntersection: function() {
-          let raycasterComp = this.el.components.raycaster;
-          if (raycasterComp && raycasterComp.intersections.length > 0) {
-            return raycasterComp.intersections[0];
+          let ray = this.el.components.raycaster;
+          if (ray && ray.intersections.length > 0) {
+            return ray.intersections[0];
           }
           return null;
         },
 
-        tick: function() {
-          const hit = this.getIntersection();
-          if (hit && hit.el) {
-            if (hit.el.classList.contains('voxel')) {
-              // Highlighting a block
-              this.highlightBox.object3D.position.copy(hit.el.object3D.position);
-              this.highlightBox.object3D.scale.set(1.03, 1.03, 1.03);
-              this.highlightBox.object3D.visible = true;
-            } else if (hit.el.classList.contains('ground')) {
-              // Highlighting empty grid space on the bedrock
-              const targetX = Math.round(hit.point.x + (hit.face.normal.x * 0.5));
-              const targetY = Math.round(hit.point.y + (hit.face.normal.y * 0.5));
-              const targetZ = Math.round(hit.point.z + (hit.face.normal.z * 0.5));
-              this.highlightBox.object3D.position.set(targetX, targetY, targetZ);
-              this.highlightBox.object3D.scale.set(1, 1, 1);
-              this.highlightBox.object3D.visible = true;
-            } else {
-              this.highlightBox.object3D.visible = false;
-            }
-          } else {
-            this.highlightBox.object3D.visible = false;
+        spawnAndGrabPart: function(type, color, spawnPoint) {
+          // Create the new part dynamically
+          let newPart = document.createElement(`a-${type}`);
+          newPart.setAttribute('class', 'machine-part');
+          newPart.setAttribute('material', `color: ${color}; roughness: 0.5;`);
+          
+          // Set initial dimensions based on type
+          if (type === 'box') {
+            newPart.setAttribute('width', '0.5');
+            newPart.setAttribute('height', '0.5');
+            newPart.setAttribute('depth', '0.5');
+          } else if (type === 'cylinder') { // Represents a wheel or gear
+            newPart.setAttribute('radius', '0.3');
+            newPart.setAttribute('height', '0.2');
+          } else if (type === 'sphere') { // Represents a joint or ball bearing
+            newPart.setAttribute('radius', '0.25');
           }
-        }
-      });
 
-      // DAY/NIGHT
-      AFRAME.registerComponent('day-night-cycle', {
-        tick: function (time, timeDelta) {
-          var rotationIncrement = (timeDelta / 120000) * Math.PI * 2;
-          this.el.object3D.rotation.x += rotationIncrement;
+          newPart.setAttribute('position', spawnPoint);
+          document.querySelector('a-scene').appendChild(newPart);
+
+          // Force the raycaster to recognize the new object instantly
+          setTimeout(() => {
+            this.el.components.raycaster.refreshObjects();
+          }, 10);
+
+          // Immediately grab the newly spawned part
+          this.carriedEntity = newPart;
+          this.carryDistance = 2; // Pull it to a comfortable distance
+        },
+
+        tick: function() {
+          // If we are holding something, calculate where the laser pointer ends and move the object there
+          if (this.carriedEntity) {
+            // Calculate the point X meters directly in front of the controller
+            this.targetVector.set(0, 0, -this.carryDistance);
+            this.el.object3D.localToWorld(this.targetVector);
+            
+            // Instantly move the carried entity to the tip of the laser
+            this.carriedEntity.object3D.position.copy(this.targetVector);
+          }
         }
       });
     </script>
   </head>
   <body>
-    <a-scene fog="type: linear; color: #A0C4DF; near: 8; far: 20">
-      <a-sky color="#A0C4DF"></a-sky>
+    <a-scene fog="type: exponential; color: #222; density: 0.05">
+      <a-sky color="#222"></a-sky>
 
-      <a-entity position="0 0 -5" day-night-cycle>
-        <a-entity light="type: directional; intensity: 0.8; color: #FFFDF0;" position="0 20 0"></a-entity>
-        <a-entity light="type: directional; intensity: 0.15; color: #334466;" position="0 -20 0"></a-entity>
-      </a-entity>
-      
-      <a-entity light="type: ambient; intensity: 0.45; color: #FFFFFF;"></a-entity>
+      <a-entity light="type: point; intensity: 0.8; distance: 20; color: #FFFDF0;" position="0 4 -2"></a-entity>
+      <a-entity light="type: ambient; intensity: 0.3; color: #FFFFFF;"></a-entity>
 
-      <a-entity id="rig" position="0 1 0">
-        <a-camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-camera>
-        
-        <a-entity id="left-hand" oculus-touch-controls="hand: left; model: false;" thumbstick-movement></a-entity>
+      <a-entity id="rig" position="0 0 0">
+        <a-camera position="0 1.6 0"></a-camera>
+        <a-entity id="left-hand" oculus-touch-controls="hand: left; model: false;"></a-entity>
         
         <a-entity id="right-hand" oculus-touch-controls="hand: right; model: false;" 
-                  thumbstick-turn
-                  raycaster="objects: .voxel, .ground; far: 8; showLine: true; lineColor: #ffaa00;" 
-                  miner-hand>
-          
-          <a-entity position="0 0.08 0.05" rotation="-45 0 0">
-            <a-plane width="0.28" height="0.14" color="#111" opacity="0.9"></a-plane>
-            <a-text id="hud-text" value="" align="center" color="#00FFCC" width="0.9" position="0 0 0.01"></a-text>
-          </a-entity>
+                  raycaster="objects: .toolbox-item, .machine-part; far: 10; showLine: true; lineColor: #00FFCC;" 
+                  laser-grabber>
         </a-entity>
       </a-entity>
 
-      <a-plane class="ground" position="0 -1.05 0" rotation="-90 0 0" width="200" height="200" material="color: #2E4B26; roughness: 1.0;"></a-plane>
+      <a-box position="0 0.8 -2" width="4" height="0.1" depth="2" color="#444" roughness="0.8"></a-box>
+      <a-box position="-1.8 0.4 -2" width="0.1" height="0.8" depth="1.8" color="#333"></a-box>
+      <a-box position="1.8 0.4 -2" width="0.1" height="0.8" depth="1.8" color="#333"></a-box>
 
-      <a-entity id="world" world-manager>
-        <a-box id="highlight-frame" 
-               material="color: #00FF66; wireframe: true; shader: flat;" 
-               visible="false">
+      <a-entity position="0 1.8 -3">
+        <a-text value="TOOLBOX" align="center" position="0 0.6 0" color="#00FFCC"></a-text>
+        
+        <a-box class="toolbox-item" toolbox-item="partType: box; color: #C0C0C0" 
+               position="-0.8 0 0" width="0.4" height="0.4" depth="0.4" color="#C0C0C0">
+          <a-text value="Beam" align="center" position="0 -0.4 0" scale="0.5 0.5 0.5"></a-text>
         </a-box>
+
+        <a-cylinder class="toolbox-item" toolbox-item="partType: cylinder; color: #FF4500" 
+                    position="0 0 0" radius="0.25" height="0.2" color="#FF4500" rotation="90 0 0">
+          <a-text value="Wheel" align="center" position="0 -0.4 0" scale="0.5 0.5 0.5" rotation="-90 0 0"></a-text>
+        </a-cylinder>
+
+        <a-sphere class="toolbox-item" toolbox-item="partType: sphere; color: #1E90FF" 
+                  position="0.8 0 0" radius="0.25" color="#1E90FF">
+          <a-text value="Joint" align="center" position="0 -0.4 0" scale="0.5 0.5 0.5"></a-text>
+        </a-sphere>
       </a-entity>
+
+      <a-plane position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#111" material="roughness: 1;"></a-plane>
+
     </a-scene>
   </body>
 </html>
