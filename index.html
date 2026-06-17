@@ -1,217 +1,772 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>VR Engineering Sandbox - Physics Edition</title>
-    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
+<head>
+  <title>EngineerVR Sandbox</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #050810; }
+    #desktop-ui {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 8px; background: #0d1520ee; border: 1px solid #7fffb244;
+      padding: 10px 14px; border-radius: 14px; z-index: 999;
+      font-family: 'Courier New', monospace;
+    }
+    .tbtn {
+      background: #0f1e0f; border: 1px solid #7fffb255; color: #7fffb2;
+      font-family: inherit; font-size: 11px; padding: 8px 12px; cursor: pointer;
+      border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    }
+    .tbtn .ic { font-size: 18px; }
+    .tbtn:hover, .tbtn.active { background: #7fffb2; color: #000; border-color: #7fffb2; }
+    #relay-panel {
+      position: fixed; top: 50%; left: 14px; transform: translateY(-50%);
+      background: #0d1520ee; border: 1px solid #7fffb255; color: #7fffb2;
+      font-family: 'Courier New', monospace; font-size: 11px; padding: 12px;
+      border-radius: 10px; display: none; z-index: 999; min-width: 140px;
+    }
+    #relay-panel.show { display: block; }
+    .rp-btn { font-size: 10px; padding: 3px 8px; margin: 2px; background: #0f1e0f;
+      border: 1px solid #7fffb255; color: #7fffb2; cursor: pointer; border-radius: 4px; }
+    .rp-btn:hover, .rp-btn.sel { background: #7fffb2; color: #000; }
+    .ch-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 3px; margin-top: 4px; }
+    .ch-b { text-align: center; padding: 3px; background: #0f1e0f;
+      border: 1px solid #7fffb244; border-radius: 3px; cursor: pointer; font-size: 10px; }
+    .ch-b:hover, .ch-b.sel { background: #7fffb2; color: #000; }
+    #hud-info {
+      position: fixed; top: 14px; left: 14px; color: #7fffb2;
+      font-family: 'Courier New', monospace; font-size: 12px;
+      pointer-events: none; z-index: 999; line-height: 1.9;
+      text-shadow: 0 0 8px #0f0;
+    }
+    #msg {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+      color: #7fffb2; font-family: 'Courier New', monospace; font-size: 17px; font-weight: bold;
+      pointer-events: none; z-index: 1000; opacity: 0; transition: opacity .3s;
+      background: #000c; padding: 8px 20px; border-radius: 8px; border: 1px solid #7fffb233;
+      text-shadow: 0 0 12px #0f0;
+    }
+  </style>
+</head>
+<body>
 
-    <script>
-      // COMPONENT LOGIC MANAGER
-      AFRAME.registerComponent('engineering-part', {
-        schema: {
-          type: { type: 'string', default: 'block' },
-          powered: { type: 'boolean', default: false }
-        },
-        init: function () {
-          this.gluedParts = [];
-          
-          // If it's a Lever, clicking it toggles power
-          if (this.data.type === 'lever') {
-            this.el.addEventListener('mousedown', () => { this.togglePower(); });
-            this.el.addEventListener('triggerdown', () => { this.togglePower(); });
-          }
-        },
-        togglePower: function() {
-          let newState = !this.data.powered;
-          this.el.setAttribute('engineering-part', 'powered', newState);
-          
-          // Visual feedback
-          this.el.setAttribute('material', 'color', newState ? '#00FF00' : '#FF0000');
-          
-          // Transmit power to all glued parts
-          this.gluedParts.forEach(part => {
-            part.setAttribute('engineering-part', 'powered', newState);
-          });
-        },
-        tick: function() {
-          // FAN LOGIC: Apply continuous thrust if powered
-          if (this.data.type === 'fan' && this.data.powered && this.el.body) {
-            // Apply upward force (relative to the fan's orientation)
-            let force = new CANNON.Vec3(0, 15, 0); 
-            this.el.object3D.localToWorld(force);
-            let worldPos = new CANNON.Vec3().copy(this.el.object3D.position);
-            
-            // Subtract position to get directional vector, then apply
-            force.vsub(worldPos, force); 
-            force.normalize();
-            force.scale(15, force); // Thrust power
-            
-            this.el.body.applyForce(force, this.el.body.position);
-          }
-        }
+<div id="hud-info">
+  <div id="tool-lbl">🔧 SELECT</div>
+  <div id="held-lbl"></div>
+  <div style="margin-top:8px; color:#7fffb277; font-size:10px; line-height:2">
+    Click floor/table to spawn<br>
+    Click — pick / place<br>
+    F — activate lever/relay<br>
+    G — glue mode &nbsp; R — rotate held<br>
+    Del — delete held<br>
+    WASD + mouse-look — move
+  </div>
+</div>
+<div id="msg"></div>
+
+<div id="desktop-ui">
+  <button class="tbtn active" data-t="select" onclick="ENG.setTool('select')"><span class="ic">🖐</span>SELECT</button>
+  <button class="tbtn" data-t="block"  onclick="ENG.setTool('block')"><span class="ic">🟫</span>BLOCK</button>
+  <button class="tbtn" data-t="motor"  onclick="ENG.setTool('motor')"><span class="ic">⚙️</span>MOTOR</button>
+  <button class="tbtn" data-t="lever"  onclick="ENG.setTool('lever')"><span class="ic">🕹️</span>LEVER</button>
+  <button class="tbtn" data-t="fan"    onclick="ENG.setTool('fan')"><span class="ic">💨</span>FAN</button>
+  <button class="tbtn" data-t="relay"  onclick="ENG.setTool('relay')"><span class="ic">📡</span>RELAY</button>
+  <button class="tbtn" data-t="glue"   onclick="ENG.setTool('glue')"><span class="ic">🧲</span>GLUE</button>
+</div>
+
+<div id="relay-panel">
+  <div style="margin-bottom:8px;font-weight:bold">📡 RELAY</div>
+  <div style="font-size:10px;color:#7fffb2aa;margin-bottom:3px">Mode</div>
+  <button class="rp-btn sel" id="rp-send" onclick="ENG.setRelayMode('send')">SEND</button>
+  <button class="rp-btn" id="rp-recv" onclick="ENG.setRelayMode('receive')">RECV</button>
+  <div style="font-size:10px;color:#7fffb2aa;margin:8px 0 3px">Channel</div>
+  <div class="ch-grid" id="ch-grid"></div>
+  <div style="margin-top:8px;font-size:10px;color:#7fffb2aa" id="rp-status">—</div>
+</div>
+
+<a-scene
+  renderer="antialias: true; colorManagement: true"
+  background="color: #080d18"
+  fog="type: exponential; color: #080d18; density: 0.02"
+  vr-mode-ui="enabled: true">
+
+  <a-assets></a-assets>
+
+  <a-light type="ambient" color="#3a4a5a" intensity="0.9"></a-light>
+  <a-light type="directional" color="#ffffff" intensity="1.0" position="6 12 6" cast-shadow="true"></a-light>
+  <a-light type="point" color="#44ffaa" intensity="0.6" distance="30" position="-4 4 -4"></a-light>
+  <a-light type="point" color="#7fffb2" intensity="0.6" distance="15" position="0 4 -6.5"></a-light>
+
+  <a-plane id="floor" class="spawnable" position="0 0 0" rotation="-90 0 0" width="40" height="40"
+    color="#0d1220" shadow="receive:true"></a-plane>
+
+  <a-entity position="0 0.002 0" rotation="-90 0 0">
+    <a-plane width="30" height="30" material="color:#7fffb2;opacity:0.05;transparent:true;wireframe:true"></a-plane>
+  </a-entity>
+
+  <a-box position="0 4.5 -7" width="12" height="0.04" depth="0.04" color="#7fffb2" emissive="#7fffb2" emissive-intensity="1"></a-box>
+  <a-plane position="0 4 -8" width="20" height="8" color="#0a0f1c" shadow="receive:true"></a-plane>
+
+  <a-entity id="table">
+    <a-box class="spawnable table-surface" position="0 0.87 0" width="2.6" height="0.08" depth="1.3"
+      color="#6b4226" shadow="cast:true;receive:true"></a-box>
+    <a-box position="-1.2 0.41 -0.58" width="0.07" height="0.82" depth="0.07" color="#4a2c18" shadow="cast:true"></a-box>
+    <a-box position=" 1.2 0.41 -0.58" width="0.07" height="0.82" depth="0.07" color="#4a2c18" shadow="cast:true"></a-box>
+    <a-box position="-1.2 0.41  0.58" width="0.07" height="0.82" depth="0.07" color="#4a2c18" shadow="cast:true"></a-box>
+    <a-box position=" 1.2 0.41  0.58" width="0.07" height="0.82" depth="0.07" color="#4a2c18" shadow="cast:true"></a-box>
+    <a-box position="0 0.8 0.625"  width="2.4" height="0.06" depth="0.05" color="#4a2c18"></a-box>
+    <a-box position="0 0.8 -0.625" width="2.4" height="0.06" depth="0.05" color="#4a2c18"></a-box>
+  </a-entity>
+
+  <a-entity id="rig" position="0 0 2.5">
+    <a-camera id="cam" position="0 1.7 0" wasd-controls look-controls>
+      <a-cursor raycaster="objects: .clickable; far: 15" color="#7fffb2" fuse="false" visible="true"
+        geometry="primitive:ring;radiusInner:0.01;radiusOuter:0.016"
+        material="color:#7fffb2;shader:flat;opacity:0.8"></a-cursor>
+    </a-camera>
+    <a-entity id="left-ctrl" laser-controls="hand:left" raycaster="objects:.clickable;far:15"></a-entity>
+    <a-entity id="right-ctrl" laser-controls="hand:right" raycaster="objects:.clickable;far:15"></a-entity>
+  </a-entity>
+
+  <a-entity id="wrist-toolbox" visible="false">
+    <a-torus radius="0.045" radius-tubular="0.012" color="#222233"></a-torus>
+    <a-box class="vr-tool-btn clickable" data-spawn="block" position=" 0.08  0.055 0" width="0.022" height="0.022" depth="0.007" color="#3a7ac8" emissive="#3a7ac8" emissive-intensity="0.3"></a-box>
+    <a-box class="vr-tool-btn clickable" data-spawn="motor" position=" 0.055 0.09  0" width="0.022" height="0.022" depth="0.007" color="#d47d30" emissive="#d47d30" emissive-intensity="0.3"></a-box>
+    <a-box class="vr-tool-btn clickable" data-spawn="lever" position="-0.005 0.1   0" width="0.022" height="0.022" depth="0.007" color="#44cc77" emissive="#44cc77" emissive-intensity="0.3"></a-box>
+    <a-box class="vr-tool-btn clickable" data-spawn="fan"   position="-0.065 0.09  0" width="0.022" height="0.022" depth="0.007" color="#cc3366" emissive="#cc3366" emissive-intensity="0.3"></a-box>
+    <a-box class="vr-tool-btn clickable" data-spawn="relay" position="-0.08  0.055 0" width="0.022" height="0.022" depth="0.007" color="#9933cc" emissive="#9933cc" emissive-intensity="0.3"></a-box>
+    <a-sphere class="vr-tool-btn clickable" data-spawn="glue" position="0 0.04 0" radius="0.016" color="#ffff00" emissive="#ffff00" emissive-intensity="0.4"></a-sphere>
+  </a-entity>
+
+</a-scene>
+
+<script>
+const ENG = (() => {
+
+let tool = 'select';
+let heldEl = null;
+let glueFirst = null;
+let selectedRelay = null;
+let objects = [];
+let gluePairs = [];
+let relayChannels = {};
+let isVR = false;
+let vrHeld = null, vrGlueMode = false, vrGlueFirst = null;
+
+const TABLE_Y = 0.91;
+const FLOOR_Y = 0;
+
+document.addEventListener('DOMContentLoaded', () => {
+  for(let i=1;i<=10;i++) relayChannels[i]=false;
+  buildRelayPanel();
+
+  const scene = document.querySelector('a-scene');
+  scene.addEventListener('loaded', () => {
+    setTimeout(() => {
+      spawnAt('block', {x:-0.5, y:TABLE_Y+0.15, z:0});
+      spawnAt('motor', {x: 0,   y:TABLE_Y+0.15, z:0});
+      spawnAt('lever', {x: 0.6, y:TABLE_Y+0.13, z:0});
+    }, 400);
+
+    bindDesktopInput();
+    bindVREvents();
+
+    scene.addEventListener('enter-vr', () => {
+      isVR = true;
+      const wrist = document.getElementById('wrist-toolbox');
+      const leftCtrl = document.getElementById('left-ctrl');
+      leftCtrl.appendChild(wrist);
+      wrist.setAttribute('position','0 0.06 -0.02');
+      wrist.setAttribute('visible', true);
+      document.getElementById('desktop-ui').style.display = 'none';
+      document.getElementById('hud-info').style.display = 'none';
+    });
+    scene.addEventListener('exit-vr', () => {
+      isVR = false;
+      document.getElementById('desktop-ui').style.display = 'flex';
+      document.getElementById('hud-info').style.display = 'block';
+    });
+
+    let lastT = performance.now()/1000;
+    scene.addEventListener('renderstart', () => {});
+    function tick() {
+      const now = performance.now()/1000;
+      const dt = Math.min(now-lastT, 0.04);
+      lastT = now;
+      if(dt>0) { propagatePower(); physicsStep(dt); updateVRHeld(); }
+      requestAnimationFrame(tick);
+    }
+    tick();
+  });
+});
+
+function makeBlock() {
+  const e = document.createElement('a-box');
+  e.setAttribute('width','0.25'); e.setAttribute('height','0.25'); e.setAttribute('depth','0.25');
+  e.setAttribute('color','#3a7ac8'); e.setAttribute('shadow','cast:true;receive:true');
+  e.setAttribute('class','clickable');
+  initPhysics(e,'block',1);
+  return e;
+}
+
+function makeMotor() {
+  const grp = document.createElement('a-entity');
+  grp.setAttribute('class','clickable');
+  const body = document.createElement('a-cylinder');
+  body.setAttribute('radius','0.1'); body.setAttribute('height','0.18');
+  body.setAttribute('rotation','90 0 0'); body.setAttribute('color','#d47d30');
+  body.setAttribute('shadow','cast:true');
+  grp.appendChild(body);
+  const shaft = document.createElement('a-entity');
+  shaft.setAttribute('position','0 0 0.09');
+  const shaftCyl = document.createElement('a-cylinder');
+  shaftCyl.setAttribute('radius','0.02'); shaftCyl.setAttribute('height','0.16');
+  shaftCyl.setAttribute('rotation','90 0 0'); shaftCyl.setAttribute('color','#f0c070');
+  shaft.appendChild(shaftCyl);
+  const key = document.createElement('a-box');
+  key.setAttribute('position','0.02 0 0'); key.setAttribute('width','0.015'); key.setAttribute('height','0.015'); key.setAttribute('depth','0.18');
+  key.setAttribute('rotation','90 0 0'); key.setAttribute('color','#ffffff');
+  shaft.appendChild(key);
+  grp.appendChild(shaft);
+  const ring = document.createElement('a-torus');
+  ring.setAttribute('position','0 0 0.09'); ring.setAttribute('radius','0.1'); ring.setAttribute('radius-tubular','0.012');
+  ring.setAttribute('rotation','90 0 0'); ring.setAttribute('color','#445566');
+  grp.appendChild(ring);
+  initPhysics(grp,'motor',1.5);
+  grp._shaft = shaft;
+  grp._spinSpeed = 4;
+  return grp;
+}
+
+function makeLever() {
+  const grp = document.createElement('a-entity');
+  grp.setAttribute('class','clickable');
+  const base = document.createElement('a-box');
+  base.setAttribute('position','0 0.025 0'); base.setAttribute('width','0.22'); base.setAttribute('height','0.05'); base.setAttribute('depth','0.14');
+  base.setAttribute('color','#44cc77'); base.setAttribute('shadow','cast:true');
+  grp.appendChild(base);
+  const post = document.createElement('a-cylinder');
+  post.setAttribute('position','0 0.08 0'); post.setAttribute('radius','0.015'); post.setAttribute('height','0.06');
+  post.setAttribute('color','#445566');
+  grp.appendChild(post);
+  const arm = document.createElement('a-entity');
+  arm.setAttribute('position','0 0.11 0');
+  const rod = document.createElement('a-cylinder');
+  rod.setAttribute('position','0 0.1 0'); rod.setAttribute('radius','0.012'); rod.setAttribute('height','0.2');
+  rod.setAttribute('color','#445566');
+  arm.appendChild(rod);
+  const knob = document.createElement('a-sphere');
+  knob.setAttribute('position','0 0.21 0'); knob.setAttribute('radius','0.035');
+  knob.setAttribute('color','#ff8800');
+  arm.appendChild(knob);
+  grp.appendChild(arm);
+  const led = document.createElement('a-circle');
+  led.setAttribute('position','0 0.052 0.05'); led.setAttribute('radius','0.012');
+  led.setAttribute('rotation','-90 0 0'); led.setAttribute('color','#002200');
+  grp.appendChild(led);
+  initPhysics(grp,'lever',1.2);
+  grp._arm = arm; grp._led = led;
+  return grp;
+}
+
+function makeFan() {
+  const grp = document.createElement('a-entity');
+  grp.setAttribute('class','clickable');
+  const ring = document.createElement('a-torus');
+  ring.setAttribute('radius','0.13'); ring.setAttribute('radius-tubular','0.02');
+  ring.setAttribute('color','#cc3366'); ring.setAttribute('shadow','cast:true');
+  grp.appendChild(ring);
+  const back = document.createElement('a-circle');
+  back.setAttribute('radius','0.12'); back.setAttribute('position','0 0 -0.02');
+  back.setAttribute('color','#991144');
+  grp.appendChild(back);
+  const hub = document.createElement('a-entity');
+  const hubMesh = document.createElement('a-cylinder');
+  hubMesh.setAttribute('radius','0.02'); hubMesh.setAttribute('height','0.04');
+  hubMesh.setAttribute('rotation','90 0 0'); hubMesh.setAttribute('color','#445566');
+  hub.appendChild(hubMesh);
+  for(let i=0;i<5;i++) {
+    const a = (i/5)*Math.PI*2;
+    const blade = document.createElement('a-box');
+    blade.setAttribute('width','0.09'); blade.setAttribute('height','0.025'); blade.setAttribute('depth','0.035');
+    blade.setAttribute('position', (Math.cos(a)*0.055).toFixed(3)+' '+(Math.sin(a)*0.055).toFixed(3)+' 0');
+    blade.setAttribute('rotation', '0 0 '+(a*180/Math.PI+30).toFixed(1));
+    blade.setAttribute('color','#ff6699'); blade.setAttribute('side','double');
+    hub.appendChild(blade);
+  }
+  grp.appendChild(hub);
+  const arr = document.createElement('a-cylinder');
+  arr.setAttribute('radius','0.005'); arr.setAttribute('height','0.12');
+  arr.setAttribute('position','0 0 0.09'); arr.setAttribute('rotation','90 0 0');
+  arr.setAttribute('color','#ffffff'); arr.setAttribute('opacity','0.25'); arr.setAttribute('transparent','true');
+  grp.appendChild(arr);
+  initPhysics(grp,'fan',0.9);
+  grp._hub = hub; grp._fanSpeed = 12; grp._thrust = 2.5;
+  return grp;
+}
+
+function makeRelay() {
+  const grp = document.createElement('a-entity');
+  grp.setAttribute('class','clickable');
+  const body = document.createElement('a-box');
+  body.setAttribute('width','0.16'); body.setAttribute('height','0.1'); body.setAttribute('depth','0.08');
+  body.setAttribute('color','#9933cc'); body.setAttribute('shadow','cast:true');
+  grp.appendChild(body);
+  [-0.09,0.09].forEach(x => {
+    const fin = document.createElement('a-box');
+    fin.setAttribute('position', x+' 0 0'); fin.setAttribute('width','0.015'); fin.setAttribute('height','0.07'); fin.setAttribute('depth','0.06');
+    fin.setAttribute('color','#445566');
+    grp.appendChild(fin);
+  });
+  const ant = document.createElement('a-cylinder');
+  ant.setAttribute('position','0.04 0.13 0'); ant.setAttribute('radius','0.004'); ant.setAttribute('height','0.1');
+  ant.setAttribute('color','#889999');
+  grp.appendChild(ant);
+  const ball = document.createElement('a-sphere');
+  ball.setAttribute('position','0.04 0.19 0'); ball.setAttribute('radius','0.008');
+  ball.setAttribute('color','#889999');
+  grp.appendChild(ball);
+  const led = document.createElement('a-sphere');
+  led.setAttribute('position','0 0.06 0.042'); led.setAttribute('radius','0.01');
+  led.setAttribute('color','#220022'); led.setAttribute('emissive','#220022'); led.setAttribute('emissive-intensity','1');
+  grp.appendChild(led);
+  initPhysics(grp,'relay',0.8);
+  grp._led = led;
+  grp._relayMode = 'send';
+  grp._channel = 1;
+  grp._relayActive = false;
+  return grp;
+}
+
+function initPhysics(el, type, mass) {
+  el._phys = { vel:{x:0,y:0,z:0}, onSurface:false, powered:false, active:false, type, mass };
+}
+
+function spawnAt(type, pos) {
+  let el;
+  switch(type) {
+    case 'block': el = makeBlock(); break;
+    case 'motor': el = makeMotor(); break;
+    case 'lever': el = makeLever(); break;
+    case 'fan':   el = makeFan();   break;
+    case 'relay': el = makeRelay(); break;
+    default: return null;
+  }
+  el.setAttribute('position', pos);
+  document.querySelector('a-scene').appendChild(el);
+  objects.push(el);
+  return el;
+}
+
+function getPos(el){ const p=el.getAttribute('position'); return {x:p.x||0,y:p.y||0,z:p.z||0}; }
+function setPos(el,p){ el.setAttribute('position',p); }
+function vAdd(a,b){return {x:a.x+b.x,y:a.y+b.y,z:a.z+b.z};}
+function vSub(a,b){return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z};}
+function vLerp(a,b,t){return {x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t,z:a.z+(b.z-a.z)*t};}
+
+function propagatePower() {
+  for(let i=1;i<=10;i++) relayChannels[i]=false;
+  objects.forEach(o => {
+    if(o._phys.type==='lever') propagateFrom(o, o._phys.active, new Set());
+    if(o._phys.type==='relay' && o._relayMode==='send' && o._relayActive) relayChannels[o._channel]=true;
+  });
+  objects.forEach(o => {
+    if(o._phys.type==='relay' && o._relayMode==='receive') {
+      const powered = relayChannels[o._channel]||false;
+      o._phys.powered = powered; o._relayActive = powered;
+      if(powered) propagateFrom(o, true, new Set());
+    }
+  });
+}
+function propagateFrom(src, active, visited) {
+  if(visited.has(src)) return; visited.add(src);
+  gluePairs.forEach(p => {
+    const other = p.a===src?p.b:p.b===src?p.a:null;
+    if(!other) return;
+    if(other._phys.type!=='lever'&&other._phys.type!=='relay') other._phys.powered = active;
+    if(other._phys.type==='relay'&&other._relayMode==='send') other._relayActive = active;
+    propagateFrom(other, active, visited);
+  });
+}
+
+const GRAVITY=-9.8, BOUNCE=0.12, DRAG=0.97;
+
+function physicsStep(dt) {
+  objects.forEach(obj => {
+    const d = obj._phys;
+    if(!d) return;
+    if(obj===heldEl || obj===vrHeld) { d.vel={x:0,y:0,z:0}; return; }
+
+    if(d.type==='motor' && d.powered && obj._shaft) {
+      const cr = obj._shaft.getAttribute('rotation')||{x:0,y:0,z:0};
+      obj._shaft.setAttribute('rotation',{x:cr.x,y:cr.y,z:(cr.z||0)+obj._spinSpeed*dt*57.3});
+      gluePairs.forEach(p => {
+        const other = p.a===obj?p.b:p.b===obj?p.a:null;
+        if(!other) return;
+        const oPos=getPos(other), mPos=getPos(obj);
+        const rx=oPos.x-mPos.x, rz=oPos.z-mPos.z;
+        const angle=obj._spinSpeed*dt;
+        const cos=Math.cos(angle), sin=Math.sin(angle);
+        other.setAttribute('position',{x:mPos.x+rx*cos-rz*sin, y:oPos.y, z:mPos.z+rx*sin+rz*cos});
+        const cR = other.getAttribute('rotation')||{x:0,y:0,z:0};
+        other.setAttribute('rotation',{x:cR.x,y:(cR.y||0)+angle*57.3,z:cR.z});
       });
+    }
 
-      // UNIVERSAL PHYSICS GRABBER & GLUE TOOL
-      AFRAME.registerComponent('physics-tool', {
-        init: function () {
-          this.heldEntity = null;
-          this.carryDistance = 1.5;
-
-          // GRAB (Trigger / Left Click)
-          const onGrab = () => {
-            let hit = this.getIntersection();
-            if (!hit) return;
-
-            // 1. Spawning from Wrist Menu
-            if (hit.el.classList.contains('toolbox-item')) {
-              const type = hit.el.getAttribute('data-type');
-              const color = hit.el.getAttribute('color');
-              this.spawnPart(type, color, hit.point);
-            } 
-            // 2. Grabbing a real part
-            else if (hit.el.classList.contains('machine-part')) {
-              this.heldEntity = hit.el;
-              this.carryDistance = hit.distance;
-              
-              // Remove gravity while holding
-              this.heldEntity.removeAttribute('dynamic-body');
-            }
-          };
-
-          // DROP (Release Trigger / Click)
-          const onRelease = () => {
-            if (this.heldEntity) {
-              // Re-enable physics gravity
-              this.heldEntity.setAttribute('dynamic-body', 'mass: 1; linearDamping: 0.5; angularDamping: 0.5;');
-              this.heldEntity = null;
-            }
-          };
-
-          // GLUE (Grip / Right Click)
-          const onGlue = () => {
-            if (!this.heldEntity) return; // Must be holding something to glue it to something else
-
-            let hit = this.getIntersection();
-            // Don't glue to yourself, and only glue to other machine parts
-            if (hit && hit.el !== this.heldEntity && hit.el.classList.contains('machine-part')) {
-              this.glueObjects(this.heldEntity, hit.el);
-            }
-          };
-
-          this.el.addEventListener('mousedown', onGrab);
-          this.el.addEventListener('triggerdown', onGrab);
-          
-          this.el.addEventListener('mouseup', onRelease);
-          this.el.addEventListener('triggerup', onRelease);
-
-          // Using contextmenu (Right Click) for PC testing of the Grip button
-          document.addEventListener('contextmenu', (e) => { e.preventDefault(); onGlue(); });
-          this.el.addEventListener('gripdown', onGlue);
-        },
-
-        getIntersection: function() {
-          let ray = this.el.components.raycaster;
-          if (ray && ray.intersections.length > 0) return ray.intersections[0];
-          return null;
-        },
-
-        spawnPart: function(type, color, pos) {
-          let el = document.createElement('a-box');
-          el.setAttribute('class', 'machine-part');
-          el.setAttribute('data-type', type);
-          el.setAttribute('engineering-part', `type: ${type}`);
-          el.setAttribute('material', `color: ${color}; roughness: 0.5;`);
-          el.setAttribute('width', '0.3'); el.setAttribute('height', '0.3'); el.setAttribute('depth', '0.3');
-          el.setAttribute('position', pos);
-          
-          // Different shapes for visuals
-          if (type === 'fan') el.setAttribute('geometry', 'primitive: cylinder; radius: 0.2; height: 0.1');
-          if (type === 'lever') el.setAttribute('geometry', 'primitive: cone; radiusBottom: 0.15; height: 0.4');
-
-          document.querySelector('a-scene').appendChild(el);
-          
-          // Grab it immediately
-          this.heldEntity = el;
-          this.carryDistance = 1.5;
-        },
-
-        glueObjects: function(objA, objB) {
-          // Wait for Cannon bodies to initialize
-          if (!objA.body || !objB.body) return;
-
-          // Create a Cannon.js LockConstraint to weld them together physically
-          let constraint = new CANNON.LockConstraint(objA.body, objB.body);
-          objA.body.world.addConstraint(constraint);
-
-          // Link their logic so power flows between them
-          objA.components['engineering-part'].gluedParts.push(objB);
-          objB.components['engineering-part'].gluedParts.push(objA);
-
-          // Visual feedback for successful glue
-          let spark = document.createElement('a-sphere');
-          spark.setAttribute('radius', '0.05');
-          spark.setAttribute('color', '#FFFF00');
-          spark.setAttribute('position', objA.getAttribute('position'));
-          document.querySelector('a-scene').appendChild(spark);
-          setTimeout(() => spark.remove(), 200);
-        },
-
-        tick: function() {
-          if (this.heldEntity) {
-            let target = new THREE.Vector3(0, 0, -this.carryDistance);
-            this.el.object3D.localToWorld(target);
-            this.heldEntity.object3D.position.copy(target);
-          }
-        }
+    if(d.type==='fan' && d.powered && obj._hub) {
+      const cr = obj._hub.getAttribute('rotation')||{x:0,y:0,z:0};
+      obj._hub.setAttribute('rotation',{x:cr.x,y:cr.y,z:(cr.z||0)+obj._fanSpeed*dt*57.3});
+      gluePairs.forEach(p => {
+        const other = p.a===obj?p.b:p.b===obj?p.a:null;
+        if(!other||!other._phys) return;
+        other._phys.vel.y += obj._thrust*dt*0.4;
       });
-    </script>
-  </head>
-  <body>
-    <a-scene physics="debug: false; gravity: -9.8" fog="type: linear; color: #334; near: 2; far: 20" cursor="rayOrigin: mouse">
-      <a-sky color="#334"></a-sky>
+      d.vel.y -= obj._thrust*dt*0.15;
+    }
 
-      <a-entity light="type: point; intensity: 0.8; distance: 20; color: #FFFDF0;" position="0 4 0"></a-entity>
-      <a-entity light="type: ambient; intensity: 0.4; color: #FFFFFF;"></a-entity>
+    if(d.type==='lever' && obj._arm) {
+      const cr = obj._arm.getAttribute('rotation')||{x:0,y:0,z:0};
+      const target = d.active?-31:0;
+      obj._arm.setAttribute('rotation',{x:cr.x+(target-cr.x)*10*dt,y:0,z:0});
+      if(obj._led) obj._led.setAttribute('color', d.active?'#00ff44':'#002200');
+    }
 
-      <a-entity id="rig" position="0 0 1">
-        <a-camera position="0 1.6 0">
-          <a-entity raycaster="objects: .toolbox-item, .machine-part, .static-env; far: 10;" physics-tool visible="false"></a-entity>
-        </a-camera>
-        
-        <a-entity id="left-hand" laser-controls="hand: left">
-          <a-entity position="0 0.1 0.1" rotation="-45 90 0" scale="0.5 0.5 0.5">
-            <a-text value="TOOLBOX" position="-0.5 0.4 0" color="#00FFCC"></a-text>
-            <a-box class="toolbox-item" data-type="block" color="#888" position="-0.6 0 0" width="0.2" height="0.2" depth="0.2"></a-box>
-            <a-text value="Block" position="-0.7 -0.2 0" scale="0.5 0.5 0.5"></a-text>
+    if(d.type==='relay' && obj._led) {
+      const on = obj._relayActive||d.powered;
+      const c = on ? (obj._relayMode==='send'?'#ff4400':'#0088ff') : '#220022';
+      obj._led.setAttribute('color', c);
+      obj._led.setAttribute('emissive', c);
+    }
 
-            <a-box class="toolbox-item" data-type="fan" color="#00BFFF" position="-0.2 0 0" width="0.2" height="0.2" depth="0.2"></a-box>
-            <a-text value="Fan" position="-0.3 -0.2 0" scale="0.5 0.5 0.5"></a-text>
+    if(!d.onSurface) d.vel.y += GRAVITY*dt;
 
-            <a-box class="toolbox-item" data-type="lever" color="#FF0000" position="0.2 0 0" width="0.2" height="0.2" depth="0.2"></a-box>
-            <a-text value="Lever" position="0.1 -0.2 0" scale="0.5 0.5 0.5"></a-text>
+    const pos = getPos(obj);
+    pos.x += d.vel.x*dt; pos.y += d.vel.y*dt; pos.z += d.vel.z*dt;
+    d.vel.x*=DRAG; d.vel.y*=DRAG; d.vel.z*=DRAG;
 
-            <a-box class="toolbox-item" data-type="motor" color="#FFA500" position="0.6 0 0" width="0.2" height="0.2" depth="0.2"></a-box>
-            <a-text value="Motor" position="0.5 -0.2 0" scale="0.5 0.5 0.5"></a-text>
+    const hh = 0.13;
+    if(pos.y-hh < FLOOR_Y) {
+      pos.y = FLOOR_Y+hh;
+      if(d.vel.y<0){d.vel.y*=-BOUNCE;d.vel.x*=0.7;d.vel.z*=0.7;}
+      d.onSurface = true;
+    } else { d.onSurface = false; }
 
-            <a-box class="toolbox-item" data-type="relay" color="#9932CC" position="1.0 0 0" width="0.2" height="0.2" depth="0.2"></a-box>
-            <a-text value="Relay" position="0.9 -0.2 0" scale="0.5 0.5 0.5"></a-text>
-          </a-entity>
-        </a-entity>
-        
-        <a-entity id="right-hand" laser-controls="hand: right"
-                  raycaster="objects: .toolbox-item, .machine-part, .static-env; far: 10; showLine: true;" 
-                  physics-tool>
-          <a-text value="Trigger/L-Click: Grab/Spawn\nGrip/R-Click: Glue Together\nClick Lever: Toggle Power" 
-                  position="-0.1 0.1 0.05" rotation="-45 0 0" scale="0.2 0.2 0.2" color="#00FFCC"></a-text>
-        </a-entity>
-      </a-entity>
+    if(pos.x>-1.3&&pos.x<1.3&&pos.z>-0.65&&pos.z<0.65) {
+      if(pos.y-hh<TABLE_Y && pos.y-hh>TABLE_Y-0.35 && d.vel.y<0) {
+        pos.y = TABLE_Y+hh;
+        d.vel.y*=-BOUNCE; d.vel.x*=0.7; d.vel.z*=0.7;
+        d.onSurface = true;
+      }
+    }
 
-      <a-box class="static-env" static-body position="0 0.8 -1" width="3" height="0.1" depth="1.5" color="#5C4033"></a-box>
-      <a-box class="static-env" static-body position="-1.4 0.4 -1" width="0.1" height="0.8" depth="1.4" color="#3C2013"></a-box>
-      <a-box class="static-env" static-body position="1.4 0.4 -1" width="0.1" height="0.8" depth="1.4" color="#3C2013"></a-box>
+    pos.x=Math.max(-15,Math.min(15,pos.x));
+    pos.z=Math.max(-9,Math.min(5,pos.z));
+    pos.y=Math.max(-0.2,pos.y);
+    setPos(obj,pos);
+  });
 
-      <a-plane class="static-env" static-body position="0 0 0" rotation="-90 0 0" width="50" height="50" color="#222"></a-plane>
+  gluePairs.forEach(p => {
+    const {a,b,offset} = p;
+    const isAHeld = (a===heldEl||a===vrHeld);
+    const isBHeld = (b===heldEl||b===vrHeld);
+    if(!isAHeld && !isBHeld) {
+      const aPos = getPos(a);
+      const target = vAdd(aPos, offset);
+      const bPos = getPos(b);
+      setPos(b, vLerp(bPos, target, 0.55));
+      if(b._phys&&a._phys) Object.assign(b._phys.vel, a._phys.vel);
+    } else if(isAHeld) {
+      setPos(b, vAdd(getPos(a), offset));
+      if(b._phys&&a._phys) Object.assign(b._phys.vel, a._phys.vel);
+    } else if(isBHeld) {
+      setPos(a, vSub(getPos(b), offset));
+      if(a._phys&&b._phys) Object.assign(a._phys.vel, b._phys.vel);
+    }
+    if(p.dotEl) {
+      const aP=getPos(a), bP=getPos(b);
+      p.dotEl.setAttribute('position',{x:(aP.x+bP.x)/2,y:(aP.y+bP.y)/2,z:(aP.z+bP.z)/2});
+    }
+  });
 
-    </a-scene>
-  </body>
+  if(heldEl && !isVR) {
+    const cam = document.getElementById('cam');
+    const rig = document.getElementById('rig');
+    if(cam && rig) {
+      const camPos = cam.getAttribute('position')||{x:0,y:1.7,z:0};
+      const rigPos = rig.getAttribute('position')||{x:0,y:0,z:0};
+      const rot = cam.getAttribute('rotation')||{x:0,y:0,z:0};
+      const yaw = (rot.y||0)*Math.PI/180;
+      const pitch = (rot.x||0)*Math.PI/180;
+      const fwd = { x:-Math.sin(yaw)*Math.cos(pitch), y:Math.sin(pitch), z:-Math.cos(yaw)*Math.cos(pitch) };
+      const world = {
+        x: rigPos.x+camPos.x+fwd.x*0.9,
+        y: rigPos.y+camPos.y+fwd.y*0.9-0.1,
+        z: rigPos.z+camPos.z+fwd.z*0.9
+      };
+      setPos(heldEl, vLerp(getPos(heldEl), world, 0.25));
+      heldEl._phys.vel={x:0,y:0,z:0};
+    }
+  }
+}
+
+function glueTwo(a,b) {
+  if(gluePairs.find(p=>(p.a===a&&p.b===b)||(p.a===b&&p.b===a))) return;
+  const aPos=getPos(a), bPos=getPos(b);
+  const offset = vSub(bPos, aPos);
+  const dot = document.createElement('a-sphere');
+  dot.setAttribute('radius','0.03'); dot.setAttribute('color','#ffff00');
+  dot.setAttribute('transparent','true'); dot.setAttribute('opacity','0.6');
+  dot.setAttribute('position',{x:(aPos.x+bPos.x)/2,y:(aPos.y+bPos.y)/2,z:(aPos.z+bPos.z)/2});
+  document.querySelector('a-scene').appendChild(dot);
+  gluePairs.push({a,b,offset,dotEl:dot});
+  msg('🧲 GLUED!');
+}
+
+function bindDesktopInput() {
+  document.addEventListener('keydown', e => {
+    if(e.code==='KeyF') activatePointed();
+    if(e.code==='KeyG') setTool(tool==='glue'?'select':'glue');
+    if(e.code==='KeyR' && heldEl) {
+      const r = heldEl.getAttribute('rotation')||{x:0,y:0,z:0};
+      heldEl.setAttribute('rotation',{x:r.x,y:(r.y||0)+45,z:r.z});
+    }
+    if((e.code==='Delete'||e.code==='Backspace') && heldEl) deleteObj(heldEl);
+  });
+
+  document.querySelector('a-scene').addEventListener('click', e => {
+    const target = e.target;
+    if(!target) return;
+    const root = getRoot(target);
+
+    if(tool!=='select' && tool!=='glue') {
+      const isFloor = target.id==='floor';
+      const isTable = (target.getAttribute && target.getAttribute('class') && target.getAttribute('class').indexOf('table-surface')!==-1);
+      if(isFloor||isTable) {
+        const inter = e.detail.intersection;
+        if(inter) {
+          const p = inter.point;
+          const o = spawnAt(tool, {x:p.x, y:p.y+0.15, z:p.z});
+          if(o) { heldEl=o; highlight(o,true); updateHUD(); }
+        }
+      }
+      return;
+    }
+
+    if(tool==='glue') {
+      if(root && objects.includes(root)) {
+        if(!glueFirst) { glueFirst=root; highlight(root,true); msg('🧲 Select second object'); }
+        else if(glueFirst!==root) { highlight(glueFirst,false); glueTwo(glueFirst,root); glueFirst=null; }
+      }
+      return;
+    }
+
+    if(heldEl) { placeObj(); return; }
+    if(root && objects.includes(root)) {
+      heldEl=root; highlight(root,true);
+      if(root._phys.type==='relay') showRelayPanel(root); else hideRelayPanel();
+      updateHUD();
+    } else { hideRelayPanel(); }
+  });
+}
+
+function activatePointed() {
+  const cursor = document.querySelector('a-cursor');
+  if(!cursor || !cursor.components.raycaster) return;
+  const ix = cursor.components.raycaster.intersections;
+  if(!ix || !ix.length) return;
+  const root = getRoot(ix[0].object.el);
+  if(!root || !objects.includes(root)) return;
+  if(root._phys.type==='lever') {
+    root._phys.active = !root._phys.active;
+    msg(root._phys.active?'🕹️ LEVER ON':'🕹️ LEVER OFF');
+  }
+  if(root._phys.type==='relay' && root._relayMode==='send') {
+    root._relayActive = !root._relayActive;
+    msg('📡 CH'+root._channel+' '+(root._relayActive?'SENDING':'OFF'));
+    updateRelayStatus();
+  }
+}
+
+function placeObj() {
+  if(!heldEl) return;
+  highlight(heldEl,false);
+  heldEl._phys.vel={x:0,y:0,z:0};
+  heldEl=null; updateHUD();
+}
+
+function deleteObj(obj) {
+  highlight(obj,false);
+  gluePairs.forEach(p=>{ if((p.a===obj||p.b===obj)&&p.dotEl){ try{document.querySelector('a-scene').removeChild(p.dotEl);}catch(e){} } });
+  gluePairs = gluePairs.filter(p=>p.a!==obj&&p.b!==obj);
+  objects = objects.filter(o=>o!==obj);
+  try { document.querySelector('a-scene').removeChild(obj); } catch(e){}
+  if(heldEl===obj) heldEl=null;
+  if(vrHeld===obj) vrHeld=null;
+  updateHUD(); msg('🗑 Deleted');
+}
+
+function getRoot(el) {
+  let cur = el;
+  while(cur) {
+    if(objects.includes(cur)) return cur;
+    cur = cur.parentNode;
+    if(cur && cur.tagName==='A-SCENE') return null;
+  }
+  return null;
+}
+
+function highlight(el,on) {
+  if(on) { el._origEmissive = el.getAttribute('emissive')||'#000000'; el.setAttribute('emissive','#2a7755'); }
+  else { el.setAttribute('emissive', el._origEmissive||'#000000'); }
+  const kids = el.querySelectorAll ? el.querySelectorAll('*') : [];
+  kids.forEach(c => {
+    if(c.tagName==='A-LIGHT') return;
+    if(on) { c._origEmissive = c.getAttribute('emissive')||'#000000'; c.setAttribute('emissive','#2a7755'); }
+    else { c.setAttribute('emissive', c._origEmissive||'#000000'); }
+  });
+}
+
+function bindVREvents() {
+  const rc = document.getElementById('right-ctrl');
+  const lc = document.getElementById('left-ctrl');
+  if(!rc||!lc) return;
+
+  rc.addEventListener('triggerdown', vrTriggerDown);
+  rc.addEventListener('triggerup', vrTriggerUp);
+  rc.addEventListener('gripdown', vrGripDown);
+
+  document.querySelectorAll('.vr-tool-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.spawn;
+      if(t==='glue') { vrGlueMode=!vrGlueMode; vrGlueFirst=null; msg(vrGlueMode?'🧲 VR GLUE ON':'🧲 VR GLUE OFF'); }
+      else {
+        const ctrlPos = rc.getAttribute('position')||{x:0,y:1.2,z:0};
+        const rig = document.getElementById('rig');
+        const rigPos = rig.getAttribute('position')||{x:0,y:0,z:0};
+        const pos = {x:rigPos.x+ctrlPos.x, y:rigPos.y+ctrlPos.y+0.1, z:rigPos.z+ctrlPos.z-0.4};
+        const o = spawnAt(t, pos);
+        vrHeld = o;
+      }
+    });
+  });
+}
+
+function vrTriggerDown() {
+  const rc = document.getElementById('right-ctrl');
+  if(!rc || !rc.object3D) return;
+  const rcWorldPos = new THREE.Vector3();
+  rc.object3D.getWorldPosition(rcWorldPos);
+
+  let closestBtn=null, closestBtnDist=0.15;
+  document.querySelectorAll('.vr-tool-btn').forEach(btn => {
+    if(!btn.object3D) return;
+    const bp = new THREE.Vector3(); btn.object3D.getWorldPosition(bp);
+    const dist = rcWorldPos.distanceTo(bp);
+    if(dist<closestBtnDist){closestBtnDist=dist;closestBtn=btn;}
+  });
+  if(closestBtn) {
+    const t = closestBtn.dataset.spawn;
+    if(t==='glue') { vrGlueMode=!vrGlueMode; vrGlueFirst=null; msg(vrGlueMode?'🧲 GLUE ON':'🧲 GLUE OFF'); return; }
+    const pos = {x:rcWorldPos.x, y:rcWorldPos.y, z:rcWorldPos.z-0.4};
+    const o = spawnAt(t, pos);
+    vrHeld = o; return;
+  }
+
+  let closest=null, closestD=0.5;
+  objects.forEach(o => {
+    if(!o.object3D) return;
+    const op = new THREE.Vector3(); o.object3D.getWorldPosition(op);
+    const dist = rcWorldPos.distanceTo(op);
+    if(dist<closestD){closestD=dist;closest=o;}
+  });
+
+  if(closest) {
+    if(vrGlueMode) {
+      if(!vrGlueFirst) { vrGlueFirst=closest; highlight(closest,true); msg('🧲 Grab second'); }
+      else if(vrGlueFirst!==closest) { highlight(vrGlueFirst,false); glueTwo(vrGlueFirst,closest); vrGlueFirst=null; }
+      return;
+    }
+    vrHeld = closest;
+    if(closest._phys.type==='lever') { closest._phys.active=!closest._phys.active; msg(closest._phys.active?'🕹️ ON':'🕹️ OFF'); }
+    if(closest._phys.type==='relay'&&closest._relayMode==='send') { closest._relayActive=!closest._relayActive; msg('📡 CH'+closest._channel+' '+(closest._relayActive?'SEND':'off')); }
+  }
+}
+
+function vrTriggerUp() { if(vrHeld){ vrHeld._phys.vel={x:0,y:0,z:0}; vrHeld=null; } }
+function vrGripDown() { if(vrHeld) deleteObj(vrHeld); }
+
+function updateVRHeld() {
+  if(!vrHeld || !isVR) return;
+  const rc = document.getElementById('right-ctrl');
+  if(!rc || !rc.object3D) return;
+  const wp = new THREE.Vector3(); rc.object3D.getWorldPosition(wp);
+  const q = rc.object3D.quaternion;
+  const dir = new THREE.Vector3(0,0,-0.5); dir.applyQuaternion(q);
+  const target = {x:wp.x+dir.x, y:wp.y+dir.y, z:wp.z+dir.z};
+  setPos(vrHeld, vLerp(getPos(vrHeld), target, 0.3));
+  vrHeld._phys.vel={x:0,y:0,z:0};
+}
+
+function updateHUD() {
+  document.getElementById('tool-lbl').textContent = '🔧 '+tool.toUpperCase();
+  document.getElementById('held-lbl').textContent = heldEl
+    ? 'Holding: '+heldEl._phys.type.toUpperCase()+'  [Click to place]' : '';
+}
+
+let _mt;
+function msg(t) {
+  const el = document.getElementById('msg');
+  el.textContent = t; el.style.opacity='1';
+  clearTimeout(_mt); _mt=setTimeout(()=>el.style.opacity='0',2200);
+}
+
+function setTool(t) {
+  if(glueFirst){highlight(glueFirst,false);glueFirst=null;}
+  tool=t;
+  document.querySelectorAll('.tbtn').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
+  updateHUD();
+  if(t!=='relay'){selectedRelay=null;hideRelayPanel();}
+}
+
+function buildRelayPanel() {
+  const g = document.getElementById('ch-grid');
+  if(!g) return;
+  for(let i=1;i<=10;i++) {
+    const b = document.createElement('div');
+    b.className='ch-b'; b.textContent=i; b.dataset.ch=i;
+    b.onclick=()=>{
+      if(!selectedRelay)return;
+      selectedRelay._channel=i;
+      document.querySelectorAll('.ch-b').forEach(x=>x.classList.toggle('sel',x.dataset.ch==i));
+      updateRelayStatus();
+    };
+    g.appendChild(b);
+  }
+}
+function showRelayPanel(r) {
+  selectedRelay=r;
+  document.getElementById('relay-panel').classList.add('show');
+  document.getElementById('rp-send').classList.toggle('sel',r._relayMode==='send');
+  document.getElementById('rp-recv').classList.toggle('sel',r._relayMode==='receive');
+  document.querySelectorAll('.ch-b').forEach(b=>b.classList.toggle('sel',b.dataset.ch==r._channel));
+  updateRelayStatus();
+}
+function hideRelayPanel(){ selectedRelay=null; document.getElementById('relay-panel').classList.remove('show'); }
+function setRelayMode(m) {
+  if(!selectedRelay)return;
+  selectedRelay._relayMode=m;
+  document.getElementById('rp-send').classList.toggle('sel',m==='send');
+  document.getElementById('rp-recv').classList.toggle('sel',m==='receive');
+  updateRelayStatus();
+}
+function updateRelayStatus() {
+  if(!selectedRelay)return;
+  document.getElementById('rp-status').textContent =
+    selectedRelay._relayMode.toUpperCase()+' · CH'+selectedRelay._channel+' · '+(selectedRelay._relayActive?'ACTIVE':'standby');
+}
+
+return { setTool, setRelayMode };
+})();
+</script>
+</body>
 </html>
