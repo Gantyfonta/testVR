@@ -4,6 +4,62 @@
   <title>EngineerVR Sandbox</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+  <script>
+    // ── VR Locomotion: thumbstick smooth move (left stick) + snap-turn (right stick) ──
+    AFRAME.registerComponent('vr-locomotion', {
+      schema: { speed: {default: 2.2}, snapDeg: {default: 35} },
+      init: function () {
+        this.moveVec = {x:0, z:0};
+        this.turnCooldown = 0;
+        this.camEl = null;
+        this.onAxisL = this.onAxisL.bind(this);
+        this.onAxisR = this.onAxisR.bind(this);
+        // Left hand stick drives movement, right hand stick drives snap-turn
+        const left = document.getElementById('left-ctrl');
+        const right = document.getElementById('right-ctrl');
+        if(left) left.addEventListener('thumbstickmoved', this.onAxisL);
+        if(right) right.addEventListener('thumbstickmoved', this.onAxisR);
+        // Some runtimes fire axismove instead of thumbstickmoved
+        if(left) left.addEventListener('axismove', this.onAxisL);
+        if(right) right.addEventListener('axismove', this.onAxisR);
+      },
+      onAxisL: function (evt) {
+        const x = evt.detail.x !== undefined ? evt.detail.x : (evt.detail.axis ? evt.detail.axis[2] : 0);
+        const y = evt.detail.y !== undefined ? evt.detail.y : (evt.detail.axis ? evt.detail.axis[3] : 0);
+        const dz = 0.15;
+        this.moveVec.x = Math.abs(x) > dz ? x : 0;
+        this.moveVec.z = Math.abs(y) > dz ? y : 0;
+      },
+      onAxisR: function (evt) {
+        const x = evt.detail.x !== undefined ? evt.detail.x : (evt.detail.axis ? evt.detail.axis[2] : 0);
+        this.snapX = x;
+      },
+      tick: function (time, delta) {
+        const dt = delta / 1000;
+        if(!dt) return;
+        const cam = this.el.querySelector('[camera]') || document.getElementById('cam');
+        if(!cam) return;
+
+        // Smooth movement relative to head yaw
+        if(this.moveVec.x || this.moveVec.z) {
+          const camRot = cam.object3D.rotation.y;
+          const fwd = { x: -Math.sin(camRot), z: -Math.cos(camRot) };
+          const right = { x: Math.cos(camRot), z: -Math.sin(camRot) };
+          const speed = this.data.speed * dt;
+          this.el.object3D.position.x += (fwd.x * -this.moveVec.z + right.x * this.moveVec.x) * speed;
+          this.el.object3D.position.z += (fwd.z * -this.moveVec.z + right.z * this.moveVec.x) * speed;
+        }
+
+        // Snap turn with cooldown so it doesn't spin continuously
+        this.turnCooldown -= dt;
+        if(this.snapX && Math.abs(this.snapX) > 0.6 && this.turnCooldown <= 0) {
+          const dir = this.snapX > 0 ? -1 : 1;
+          this.el.object3D.rotation.y += dir * (this.data.snapDeg * Math.PI / 180);
+          this.turnCooldown = 0.35;
+        }
+      }
+    });
+  </script>
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; background: #050810; }
     #desktop-ui {
@@ -118,24 +174,57 @@
     <a-box position="0 0.8 -0.625" width="2.4" height="0.06" depth="0.05" color="#4a2c18"></a-box>
   </a-entity>
 
-  <a-entity id="rig" position="0 0 2.5">
+  <a-entity id="rig" position="0 0 2.5" vr-locomotion="speed:2.2; snapDeg:35">
     <a-camera id="cam" position="0 1.7 0" wasd-controls look-controls>
       <a-cursor raycaster="objects: .clickable; far: 15" color="#7fffb2" fuse="false" visible="true"
         geometry="primitive:ring;radiusInner:0.01;radiusOuter:0.016"
         material="color:#7fffb2;shader:flat;opacity:0.8"></a-cursor>
     </a-camera>
-    <a-entity id="left-ctrl" laser-controls="hand:left" raycaster="objects:.clickable;far:15"></a-entity>
-    <a-entity id="right-ctrl" laser-controls="hand:right" raycaster="objects:.clickable;far:15"></a-entity>
-  </a-entity>
 
-  <a-entity id="wrist-toolbox" visible="false">
-    <a-torus radius="0.045" radius-tubular="0.012" color="#222233"></a-torus>
-    <a-box class="vr-tool-btn clickable" data-spawn="block" position=" 0.08  0.055 0" width="0.022" height="0.022" depth="0.007" color="#3a7ac8" emissive="#3a7ac8" emissive-intensity="0.3"></a-box>
-    <a-box class="vr-tool-btn clickable" data-spawn="motor" position=" 0.055 0.09  0" width="0.022" height="0.022" depth="0.007" color="#d47d30" emissive="#d47d30" emissive-intensity="0.3"></a-box>
-    <a-box class="vr-tool-btn clickable" data-spawn="lever" position="-0.005 0.1   0" width="0.022" height="0.022" depth="0.007" color="#44cc77" emissive="#44cc77" emissive-intensity="0.3"></a-box>
-    <a-box class="vr-tool-btn clickable" data-spawn="fan"   position="-0.065 0.09  0" width="0.022" height="0.022" depth="0.007" color="#cc3366" emissive="#cc3366" emissive-intensity="0.3"></a-box>
-    <a-box class="vr-tool-btn clickable" data-spawn="relay" position="-0.08  0.055 0" width="0.022" height="0.022" depth="0.007" color="#9933cc" emissive="#9933cc" emissive-intensity="0.3"></a-box>
-    <a-sphere class="vr-tool-btn clickable" data-spawn="glue" position="0 0.04 0" radius="0.016" color="#ffff00" emissive="#ffff00" emissive-intensity="0.4"></a-sphere>
+    <!-- LEFT HAND: wrist toolbox lives here permanently, never reparented -->
+    <a-entity id="left-ctrl"
+      laser-controls="hand:left"
+      raycaster="objects:.clickable; far:15; lineColor:#ffe066; lineOpacity:0.6">
+
+      <!-- Wrist toolbox panel: angled to face the player when the wrist turns up -->
+      <a-entity id="wrist-toolbox" position="0 0.02 0.08" rotation="-70 0 0" visible="false">
+        <!-- Backing plate so it reads against any background -->
+        <a-plane width="0.18" height="0.27" color="#0d1520" opacity="0.92" side="double"></a-plane>
+        <a-text value="TOOLBOX" align="center" position="0 0.115 0.002" color="#7fffb2"
+          width="1.1" scale="0.5 0.5 0.5"></a-text>
+
+        <a-entity class="vr-tool-btn clickable" data-spawn="block" position="-0.045 0.06 0.003">
+          <a-box width="0.05" height="0.05" depth="0.012" color="#3a7ac8" emissive="#3a7ac8" emissive-intensity="0.4"></a-box>
+          <a-text value="BLOCK" align="center" position="0 -0.035 0.002" color="#cfe8ff" width="1" scale="0.32 0.32 0.32"></a-text>
+        </a-entity>
+        <a-entity class="vr-tool-btn clickable" data-spawn="motor" position="0.045 0.06 0.003">
+          <a-box width="0.05" height="0.05" depth="0.012" color="#d47d30" emissive="#d47d30" emissive-intensity="0.4"></a-box>
+          <a-text value="MOTOR" align="center" position="0 -0.035 0.002" color="#ffe3c2" width="1" scale="0.32 0.32 0.32"></a-text>
+        </a-entity>
+        <a-entity class="vr-tool-btn clickable" data-spawn="lever" position="-0.045 -0.01 0.003">
+          <a-box width="0.05" height="0.05" depth="0.012" color="#44cc77" emissive="#44cc77" emissive-intensity="0.4"></a-box>
+          <a-text value="LEVER" align="center" position="0 -0.035 0.002" color="#cfffd9" width="1" scale="0.32 0.32 0.32"></a-text>
+        </a-entity>
+        <a-entity class="vr-tool-btn clickable" data-spawn="fan" position="0.045 -0.01 0.003">
+          <a-box width="0.05" height="0.05" depth="0.012" color="#cc3366" emissive="#cc3366" emissive-intensity="0.4"></a-box>
+          <a-text value="FAN" align="center" position="0 -0.035 0.002" color="#ffd2e0" width="1" scale="0.32 0.32 0.32"></a-text>
+        </a-entity>
+        <a-entity class="vr-tool-btn clickable" data-spawn="relay" position="-0.045 -0.08 0.003">
+          <a-box width="0.05" height="0.05" depth="0.012" color="#9933cc" emissive="#9933cc" emissive-intensity="0.4"></a-box>
+          <a-text value="RELAY" align="center" position="0 -0.035 0.002" color="#eccfff" width="1" scale="0.32 0.32 0.32"></a-text>
+        </a-entity>
+        <a-entity class="vr-tool-btn clickable" data-spawn="glue" position="0.045 -0.08 0.003">
+          <a-box width="0.05" height="0.05" depth="0.012" color="#ffff00" emissive="#ffff00" emissive-intensity="0.5"></a-box>
+          <a-text value="GLUE" align="center" position="0 -0.035 0.002" color="#fffacc" width="1" scale="0.32 0.32 0.32"></a-text>
+        </a-entity>
+      </a-entity>
+    </a-entity>
+
+    <!-- RIGHT HAND: grabbing / pointing / locomotion hand -->
+    <a-entity id="right-ctrl"
+      laser-controls="hand:right"
+      raycaster="objects:.clickable; far:15; lineColor:#7fffb2; lineOpacity:0.5">
+    </a-entity>
   </a-entity>
 
 </a-scene>
@@ -173,11 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     scene.addEventListener('enter-vr', () => {
       isVR = true;
-      const wrist = document.getElementById('wrist-toolbox');
-      const leftCtrl = document.getElementById('left-ctrl');
-      leftCtrl.appendChild(wrist);
-      wrist.setAttribute('position','0 0.06 -0.02');
-      wrist.setAttribute('visible', true);
+      document.getElementById('wrist-toolbox').setAttribute('visible', true);
       document.getElementById('desktop-ui').style.display = 'none';
       document.getElementById('hud-info').style.display = 'none';
     });
@@ -193,7 +278,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const now = performance.now()/1000;
       const dt = Math.min(now-lastT, 0.04);
       lastT = now;
-      if(dt>0) { propagatePower(); physicsStep(dt); updateVRHeld(); }
+      if(dt>0) { propagatePower(); physicsStep(dt); updateVRHover(); updateVRHeld(); }
       requestAnimationFrame(tick);
     }
     tick();
@@ -634,77 +719,166 @@ function bindVREvents() {
   rc.addEventListener('triggerdown', vrTriggerDown);
   rc.addEventListener('triggerup', vrTriggerUp);
   rc.addEventListener('gripdown', vrGripDown);
-
-  document.querySelectorAll('.vr-tool-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const t = btn.dataset.spawn;
-      if(t==='glue') { vrGlueMode=!vrGlueMode; vrGlueFirst=null; msg(vrGlueMode?'🧲 VR GLUE ON':'🧲 VR GLUE OFF'); }
-      else {
-        const ctrlPos = rc.getAttribute('position')||{x:0,y:1.2,z:0};
-        const rig = document.getElementById('rig');
-        const rigPos = rig.getAttribute('position')||{x:0,y:0,z:0};
-        const pos = {x:rigPos.x+ctrlPos.x, y:rigPos.y+ctrlPos.y+0.1, z:rigPos.z+ctrlPos.z-0.4};
-        const o = spawnAt(t, pos);
-        vrHeld = o;
-      }
-    });
-  });
 }
 
-function vrTriggerDown() {
+const GRAB_RANGE = 0.22;   // meters — how close the hand must be to highlight/grab something
+const BTN_RANGE  = 0.05;   // meters — wrist button press radius
+
+let vrHoverTarget = null;  // currently-highlighted nearby grabbable (not yet grabbed)
+let vrHoverBtn = null;     // currently-highlighted wrist button
+let vrGrabLocalPos = null; // object position relative to hand, captured at grab time
+let vrGrabLocalQuat = null;// object rotation relative to hand, captured at grab time
+
+// Runs every frame from the main tick loop: finds what the right hand is near
+// and highlights it, so the player gets feedback BEFORE pulling the trigger.
+function updateVRHover() {
+  if(!isVR) return;
   const rc = document.getElementById('right-ctrl');
   if(!rc || !rc.object3D) return;
-  const rcWorldPos = new THREE.Vector3();
-  rc.object3D.getWorldPosition(rcWorldPos);
+  const handPos = new THREE.Vector3();
+  rc.object3D.getWorldPosition(handPos);
 
-  let closestBtn=null, closestBtnDist=0.15;
+  // Wrist buttons take priority for hover (only relevant when hand is near the other wrist)
+  let bestBtn = null, bestBtnDist = BTN_RANGE;
   document.querySelectorAll('.vr-tool-btn').forEach(btn => {
     if(!btn.object3D) return;
     const bp = new THREE.Vector3(); btn.object3D.getWorldPosition(bp);
-    const dist = rcWorldPos.distanceTo(bp);
-    if(dist<closestBtnDist){closestBtnDist=dist;closestBtn=btn;}
+    const dist = handPos.distanceTo(bp);
+    if(dist < bestBtnDist) { bestBtnDist = dist; bestBtn = btn; }
   });
-  if(closestBtn) {
-    const t = closestBtn.dataset.spawn;
-    if(t==='glue') { vrGlueMode=!vrGlueMode; vrGlueFirst=null; msg(vrGlueMode?'🧲 GLUE ON':'🧲 GLUE OFF'); return; }
-    const pos = {x:rcWorldPos.x, y:rcWorldPos.y, z:rcWorldPos.z-0.4};
-    const o = spawnAt(t, pos);
-    vrHeld = o; return;
+  if(bestBtn !== vrHoverBtn) {
+    if(vrHoverBtn) setBtnHover(vrHoverBtn, false);
+    if(bestBtn) setBtnHover(bestBtn, true);
+    vrHoverBtn = bestBtn;
   }
 
-  let closest=null, closestD=0.5;
+  // Don't hover/grab world objects while already holding one, or while a button is hovered
+  if(vrHeld || bestBtn) {
+    if(vrHoverTarget) { highlight(vrHoverTarget, false); vrHoverTarget = null; }
+    return;
+  }
+
+  let best = null, bestDist = GRAB_RANGE;
   objects.forEach(o => {
     if(!o.object3D) return;
     const op = new THREE.Vector3(); o.object3D.getWorldPosition(op);
-    const dist = rcWorldPos.distanceTo(op);
-    if(dist<closestD){closestD=dist;closest=o;}
+    const dist = handPos.distanceTo(op);
+    if(dist < bestDist) { bestDist = dist; best = o; }
   });
 
-  if(closest) {
-    if(vrGlueMode) {
-      if(!vrGlueFirst) { vrGlueFirst=closest; highlight(closest,true); msg('🧲 Grab second'); }
-      else if(vrGlueFirst!==closest) { highlight(vrGlueFirst,false); glueTwo(vrGlueFirst,closest); vrGlueFirst=null; }
-      return;
-    }
-    vrHeld = closest;
-    if(closest._phys.type==='lever') { closest._phys.active=!closest._phys.active; msg(closest._phys.active?'🕹️ ON':'🕹️ OFF'); }
-    if(closest._phys.type==='relay'&&closest._relayMode==='send') { closest._relayActive=!closest._relayActive; msg('📡 CH'+closest._channel+' '+(closest._relayActive?'SEND':'off')); }
+  if(best !== vrHoverTarget) {
+    if(vrHoverTarget && vrHoverTarget !== vrGlueFirst) highlight(vrHoverTarget, false);
+    if(best) highlight(best, true);
+    vrHoverTarget = best;
   }
 }
 
-function vrTriggerUp() { if(vrHeld){ vrHeld._phys.vel={x:0,y:0,z:0}; vrHeld=null; } }
+function setBtnHover(btn, on) {
+  const box = btn.querySelector('a-box');
+  if(!box) return;
+  box.setAttribute('scale', on ? '1.15 1.15 1.15' : '1 1 1');
+}
+
+function vrTriggerDown() {
+  // Pressing a wrist button takes priority
+  if(vrHoverBtn) {
+    const t = vrHoverBtn.dataset.spawn;
+    if(t==='glue') {
+      vrGlueMode = !vrGlueMode; vrGlueFirst = null;
+      msg(vrGlueMode ? '🧲 VR GLUE ON' : '🧲 VR GLUE OFF');
+    } else {
+      const rc = document.getElementById('right-ctrl');
+      const wp = new THREE.Vector3(); rc.object3D.getWorldPosition(wp);
+      const dir = new THREE.Vector3(0,0,-1); dir.applyQuaternion(rc.object3D.quaternion);
+      const pos = {x: wp.x+dir.x*0.25, y: wp.y+dir.y*0.25, z: wp.z+dir.z*0.25};
+      const o = spawnAt(t, pos);
+      grabVR(o);
+    }
+    return;
+  }
+
+  // Otherwise grab whatever is currently hovered
+  if(!vrHoverTarget) return;
+  const target = vrHoverTarget;
+
+  if(vrGlueMode) {
+    if(!vrGlueFirst) {
+      vrGlueFirst = target; msg('🧲 Now point at the second object and pull trigger');
+    } else if(vrGlueFirst !== target) {
+      highlight(vrGlueFirst, false);
+      glueTwo(vrGlueFirst, target);
+      vrGlueFirst = null;
+    }
+    return;
+  }
+
+  // Toggle interactive components right on grab-touch (matches lever/relay desktop behavior)
+  if(target._phys.type==='lever') {
+    target._phys.active = !target._phys.active;
+    msg(target._phys.active ? '🕹️ LEVER ON' : '🕹️ LEVER OFF');
+  }
+  if(target._phys.type==='relay' && target._relayMode==='send') {
+    target._relayActive = !target._relayActive;
+    msg('📡 CH'+target._channel+' '+(target._relayActive?'SEND':'off'));
+  }
+
+  grabVR(target);
+}
+
+// Captures the object's position/rotation relative to the hand at grab time,
+// so it doesn't snap to a fixed offset — it keeps exactly where you grabbed it.
+function grabVR(obj) {
+  vrHeld = obj;
+  highlight(obj, true);
+  const rc = document.getElementById('right-ctrl');
+  if(rc && rc.object3D && obj.object3D) {
+    const handInv = new THREE.Matrix4().copy(rc.object3D.matrixWorld).invert();
+    const objWorld = new THREE.Matrix4().copy(obj.object3D.matrixWorld);
+    const relative = new THREE.Matrix4().multiplyMatrices(handInv, objWorld);
+    vrGrabLocalPos = new THREE.Vector3();
+    vrGrabLocalQuat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    relative.decompose(vrGrabLocalPos, vrGrabLocalQuat, scale);
+  } else {
+    vrGrabLocalPos = new THREE.Vector3(0,0,-0.15);
+    vrGrabLocalQuat = new THREE.Quaternion();
+  }
+}
+
+function vrTriggerUp() {
+  if(vrHeld) {
+    highlight(vrHeld, false);
+    vrHeld._phys.vel = {x:0,y:0,z:0};
+    vrHeld = null;
+  }
+  vrGrabLocalPos = null; vrGrabLocalQuat = null;
+}
+
 function vrGripDown() { if(vrHeld) deleteObj(vrHeld); }
 
+// Every frame: if holding something, place it using the captured hand-relative offset
+// (preserves orientation/grip point instead of snapping to a fixed spot in front of the hand)
 function updateVRHeld() {
-  if(!vrHeld || !isVR) return;
+  if(!vrHeld || !isVR || !vrGrabLocalPos) return;
   const rc = document.getElementById('right-ctrl');
   if(!rc || !rc.object3D) return;
-  const wp = new THREE.Vector3(); rc.object3D.getWorldPosition(wp);
-  const q = rc.object3D.quaternion;
-  const dir = new THREE.Vector3(0,0,-0.5); dir.applyQuaternion(q);
-  const target = {x:wp.x+dir.x, y:wp.y+dir.y, z:wp.z+dir.z};
-  setPos(vrHeld, vLerp(getPos(vrHeld), target, 0.3));
-  vrHeld._phys.vel={x:0,y:0,z:0};
+
+  const handWorld = rc.object3D.matrixWorld;
+  const offsetMatrix = new THREE.Matrix4().compose(vrGrabLocalPos, vrGrabLocalQuat, new THREE.Vector3(1,1,1));
+  const targetMatrix = new THREE.Matrix4().multiplyMatrices(handWorld, offsetMatrix);
+
+  const targetPos = new THREE.Vector3();
+  const targetQuat = new THREE.Quaternion();
+  const targetScale = new THREE.Vector3();
+  targetMatrix.decompose(targetPos, targetQuat, targetScale);
+
+  // Convert world position back into the object's parent space (scene root, since
+  // all spawned objects are appended directly to <a-scene>)
+  setPos(vrHeld, {x: targetPos.x, y: targetPos.y, z: targetPos.z});
+  const euler = new THREE.Euler().setFromQuaternion(targetQuat, 'YXZ');
+  vrHeld.object3D.quaternion.copy(targetQuat);
+
+  vrHeld._phys.vel = {x:0,y:0,z:0};
 }
 
 function updateHUD() {
