@@ -2,65 +2,209 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Simple VR Game</title>
+    <title>VR Engineering Sandbox</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
     
     <script>
-      AFRAME.registerComponent('arrow-controls', {
+      // --- SYSTEM: Global Power Grid ---
+      AFRAME.registerSystem('power-grid', {
         init: function () {
-          this.keys = {};
-          window.addEventListener('keydown', (e) => {
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-              this.keys[e.code] = true;
-            }
-          });
-          window.addEventListener('keyup', (e) => {
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-              this.keys[e.code] = false;
-            }
-          });
+          this.nodes = [];
+          this.relays = [];
         },
-        tick: function (time, delta) {
-          if (!delta) return;
-          let moveZ = (this.keys['ArrowDown'] ? 1 : 0) - (this.keys['ArrowUp'] ? 1 : 0);
-          let moveX = (this.keys['ArrowRight'] ? 1 : 0) - (this.keys['ArrowLeft'] ? 1 : 0);
-          
-          if (moveX === 0 && moveZ === 0) return;
-          
-          let speed = 0.005 * delta;
-          let camRotation = this.el.sceneEl.camera.el.getAttribute('rotation');
-          let angle = camRotation.y * Math.PI / 180;
-          
-          let dx = moveX * Math.cos(angle) + moveZ * Math.sin(angle);
-          let dz = -moveX * Math.sin(angle) + moveZ * Math.cos(angle);
-          
-          this.el.object3D.position.x += dx * speed;
-          this.el.object3D.position.z += dz * speed;
+        registerNode: function (node) { this.nodes.push(node); },
+        registerRelay: function (relay) { this.relays.push(relay); },
+        tick: function () {
+          // 1. Reset all nodes
+          this.nodes.forEach(n => n.isPowered = false);
+
+          // 2. Map active network channels from SEND relays
+          let activeChannels = {};
+          this.relays.forEach(r => {
+              if (r.data.mode === 'send' && r.el.components['power-node'].isPowered) {
+                  activeChannels[r.data.channel] = true;
+              }
+          });
+
+          // 3. Find all power sources (ON levers + Active RECV relays)
+          let sources = this.nodes.filter(n => {
+             if (n.el.components.lever && n.el.components.lever.isOn) return true;
+             if (n.el.components.relay && n.el.components.relay.data.mode === 'recv' && activeChannels[n.el.components.relay.data.channel]) return true;
+             return false;
+          });
+
+          // 4. Flood-fill power through glued connections
+          let queue = [...sources];
+          while(queue.length > 0) {
+              let curr = queue.shift();
+              if (!curr.isPowered) {
+                  curr.isPowered = true;
+                  curr.connections.forEach(neighbor => {
+                      if (!neighbor.isPowered) queue.push(neighbor);
+                  });
+              }
+          }
         }
       });
 
+      // --- COMPONENT: Power Node (Attached to every spawned object) ---
+      AFRAME.registerComponent('power-node', {
+        init: function() {
+          this.connections = [];
+          this.isPowered = false;
+          this.system = this.el.sceneEl.systems['power-grid'];
+          this.system.registerNode(this);
+        }
+      });
+
+      // --- COMPONENTS: Interactive Blocks ---
+      AFRAME.registerComponent('lever', {
+        init: function() {
+          this.isOn = false;
+        },
+        toggle: function() {
+          this.isOn = !this.isOn;
+          this.el.setAttribute('material', 'color', this.isOn ? '#00FF00' : '#FF0000');
+        }
+      });
+
+      AFRAME.registerComponent('motor', {
+        tick: function() {
+          let pnode = this.el.components['power-node'];
+          if (pnode && pnode.isPowered && this.el.body) {
+              let localTorque = new CANNON.Vec3(0, 10, 0); // Spin along Y axis
+              let worldTorque = this.el.body.quaternion.vmult(localTorque);
+              this.el.body.applyTorque(worldTorque);
+          }
+        }
+      });
+
+      AFRAME.registerComponent('fan', {
+        tick: function() {
+          let pnode = this.el.components['power-node'];
+          if (pnode && pnode.isPowered && this.el.body) {
+              let localForce = new CANNON.Vec3(0, 15, 0); // Push along Y axis
+              let worldForce = this.el.body.quaternion.vmult(localForce);
+              this.el.body.applyForce(worldForce, this.el.body.position);
+          }
+        }
+      });
+
+      AFRAME.registerComponent('relay', {
+        schema: { mode: {default: 'send'}, channel: {default: 1} },
+        init: function() {
+          this.system = this.el.sceneEl.systems['power-grid'];
+          this.system.registerRelay(this);
+          
+          this.text = document.createElement('a-text');
+          this.text.setAttribute('position', '0 0.16 0');
+          this.text.setAttribute('align', 'center');
+          this.text.setAttribute('color', 'black');
+          this.text.setAttribute('scale', '0.6 0.6 0.6');
+          this.el.appendChild(this.text);
+          this.updateVisuals();
+        },
+        cycle: function() {
+          let c = this.data.channel + 1;
+          let m = this.data.mode;
+          if (c > 10) {
+             c = 1;
+             m = (m === 'send') ? 'recv' : 'send';
+          }
+          this.el.setAttribute('relay', {channel: c, mode: m});
+          this.updateVisuals();
+        },
+        updateVisuals: function() {
+          this.text.setAttribute('value', `${this.data.mode.toUpperCase()}\nCH: ${this.data.channel}`);
+          this.el.setAttribute('material', 'color', this.data.mode === 'send' ? '#FFAA00' : '#00AAFF');
+        }
+      });
+
+      // --- UI & TOOLS ---
+      AFRAME.registerComponent('x-menu', {
+        init: function() {
+          let ui = this.el.querySelector('#wrist-ui');
+          this.el.addEventListener('xbuttondown', () => {
+             let isVisible = ui.getAttribute('visible');
+             ui.setAttribute('visible', !isVisible);
+          });
+        }
+      });
+
+      AFRAME.registerComponent('menu-btn', {
+        schema: { type: {type: 'string'} },
+        init: function() {
+          this.el.addEventListener('click', () => {
+            let rh = document.querySelector('#right-hand');
+            let pos = new THREE.Vector3();
+            rh.object3D.getWorldPosition(pos);
+            pos.y += 0.1; // Spawn slightly above the laser hand
+            
+            let el = document.createElement('a-entity');
+            el.setAttribute('class', 'grabbable');
+            el.setAttribute('hoverable', '');
+            el.setAttribute('grabbable', '');
+            el.setAttribute('smart-grab', '');
+            el.setAttribute('dynamic-body', '');
+            el.setAttribute('power-node', '');
+            el.setAttribute('position', pos);
+
+            let t = this.data.type;
+            if (t === 'block') {
+               el.setAttribute('geometry', 'primitive: box; width: 0.3; height: 0.3; depth: 0.3');
+               el.setAttribute('material', 'color: #1E90FF');
+            } else if (t === 'lever') {
+               el.setAttribute('geometry', 'primitive: box; width: 0.2; height: 0.3; depth: 0.2');
+               el.setAttribute('material', 'color: #FF0000');
+               el.setAttribute('lever', '');
+            } else if (t === 'motor') {
+               el.setAttribute('geometry', 'primitive: cylinder; radius: 0.15; height: 0.3');
+               el.setAttribute('material', 'color: #8A2BE2');
+               el.setAttribute('motor', '');
+            } else if (t === 'fan') {
+               el.setAttribute('geometry', 'primitive: cone; radiusBottom: 0.15; radiusTop: 0.05; height: 0.3');
+               el.setAttribute('material', 'color: #CCCCCC');
+               el.setAttribute('fan', '');
+            } else if (t === 'relay') {
+               el.setAttribute('geometry', 'primitive: box; width: 0.25; height: 0.25; depth: 0.25');
+               el.setAttribute('relay', '');
+            }
+            document.querySelector('a-scene').appendChild(el);
+          });
+        }
+      });
+
+      AFRAME.registerComponent('interact-tool', {
+        init: function () {
+          this.el.addEventListener('bbuttondown', () => {
+            let raycaster = this.el.components.raycaster;
+            let hits = raycaster.intersections;
+            if (hits && hits.length > 0) {
+                let hitEl = hits[0].object.el;
+                if (hitEl.components.lever) hitEl.components.lever.toggle();
+                if (hitEl.components.relay) hitEl.components.relay.cycle();
+            }
+          });
+        }
+      });
+
+      // --- MODIFIED CORE SYSTEMS ---
       AFRAME.registerComponent('smart-grab', {
         init: function () {
           this.isGrabbed = false;
           this.velocity = new THREE.Vector3();
           this.previousPosition = new THREE.Vector3();
-
           this.el.addEventListener('grab-start', () => {
             this.isGrabbed = true;
-            if (this.el.body) {
-              this.el.body.type = 4; // KINEMATIC
-              this.el.body.updateMassProperties();
-            }
+            if (this.el.body) { this.el.body.type = 4; this.el.body.updateMassProperties(); }
           });
           this.el.addEventListener('grab-end', () => {
             this.isGrabbed = false;
             if (this.el.body) {
-              this.el.body.type = 1; // DYNAMIC
-              this.el.body.updateMassProperties();
-              // Apply throwing momentum
+              this.el.body.type = 1; this.el.body.updateMassProperties();
               this.el.body.velocity.set(this.velocity.x * 1.2, this.velocity.y * 1.2, this.velocity.z * 1.2);
             }
           });
@@ -71,64 +215,25 @@
             this.el.object3D.getWorldPosition(currentPosition);
             this.velocity.subVectors(currentPosition, this.previousPosition).multiplyScalar(1000 / delta);
             this.previousPosition.copy(currentPosition);
-            
             if (this.el.body) {
-              let worldPos = new THREE.Vector3();
-              let worldQuat = new THREE.Quaternion();
-              this.el.object3D.getWorldPosition(worldPos);
-              this.el.object3D.getWorldQuaternion(worldQuat);
-              this.el.body.position.copy(worldPos);
-              this.el.body.quaternion.copy(worldQuat);
+              let worldPos = new THREE.Vector3(); let worldQuat = new THREE.Quaternion();
+              this.el.object3D.getWorldPosition(worldPos); this.el.object3D.getWorldQuaternion(worldQuat);
+              this.el.body.position.copy(worldPos); this.el.body.quaternion.copy(worldQuat);
             }
-          } else if (!this.isGrabbed) {
-            this.el.object3D.getWorldPosition(this.previousPosition);
-          }
-        }
-      });
-
-      AFRAME.registerComponent('cube-spawner', {
-        init: function () {
-          this.el.addEventListener('ybuttondown', () => {
-            let newCube = document.createElement('a-box');
-            newCube.setAttribute('class', 'grabbable');
-            newCube.setAttribute('hoverable', '');
-            newCube.setAttribute('grabbable', '');
-            newCube.setAttribute('smart-grab', '');
-            newCube.setAttribute('dynamic-body', '');
-            
-            let colors = ['#FF4500', '#1E90FF', '#32CD32', '#FFD700', '#8A2BE2', '#FF1493', '#00FFFF'];
-            let randomColor = colors[Math.floor(Math.random() * colors.length)];
-            newCube.setAttribute('color', randomColor);
-            
-            newCube.setAttribute('width', '0.4');
-            newCube.setAttribute('height', '0.4');
-            newCube.setAttribute('depth', '0.4');
-            
-            let worldPos = new THREE.Vector3();
-            this.el.object3D.getWorldPosition(worldPos);
-            
-            worldPos.y += 0.2;
-            worldPos.z -= 0.3;
-            
-            newCube.setAttribute('position', worldPos);
-            document.querySelector('a-scene').appendChild(newCube);
-          });
+          } else if (!this.isGrabbed) { this.el.object3D.getWorldPosition(this.previousPosition); }
         }
       });
 
       AFRAME.registerComponent('glue-tool', {
         init: function () {
           this.firstTarget = null;
-          
           this.el.addEventListener('abuttondown', () => {
             let raycaster = this.el.components.raycaster;
             let intersections = raycaster.intersections;
-
             if (!intersections || intersections.length === 0) return;
 
             let intersection = intersections[0];
             let hitEl = intersection.object.el;
-
             if (!hitEl || !hitEl.classList.contains('grabbable')) return;
 
             let glueSpot = document.createElement('a-entity');
@@ -140,22 +245,14 @@
             
             let normal = intersection.face.normal.clone();
             let lookAtPos = localPoint.clone().add(normal);
-            glueSpot.object3D.lookAt(lookAtPos);
-            glueSpot.object3D.rotateX(Math.PI / 2); 
+            glueSpot.object3D.lookAt(lookAtPos); glueSpot.object3D.rotateX(Math.PI / 2); 
             hitEl.appendChild(glueSpot);
 
             if (!this.firstTarget) {
-              this.firstTarget = { 
-                  el: hitEl, 
-                  localPoint: localPoint, 
-                  normal: normal 
-              };
+              this.firstTarget = { el: hitEl, localPoint: localPoint, normal: normal };
             } else if (this.firstTarget.el !== hitEl) {
               let secondEl = hitEl;
-              
-              if (!this.firstTarget.el.id) {
-                this.firstTarget.el.id = 'glueTarget-' + Date.now();
-              }
+              if (!this.firstTarget.el.id) this.firstTarget.el.id = 'glueTarget-' + Date.now();
 
               let firstWorldPoint = new THREE.Vector3();
               firstWorldPoint.copy(this.firstTarget.localPoint);
@@ -168,24 +265,51 @@
               let translation = new THREE.Vector3().subVectors(firstWorldPoint, secondWorldPoint);
               secondEl.object3D.position.add(translation);
 
-              // Update physics body instantly and kill momentum to prevent tearing
               if (secondEl.body && this.firstTarget.el.body) {
                   let newWorldPos = new THREE.Vector3();
                   secondEl.object3D.getWorldPosition(newWorldPos);
                   secondEl.body.position.copy(newWorldPos);
-                  
-                  secondEl.body.velocity.set(0,0,0);
-                  secondEl.body.angularVelocity.set(0,0,0);
-                  this.firstTarget.el.body.velocity.set(0,0,0);
-                  this.firstTarget.el.body.angularVelocity.set(0,0,0);
+                  secondEl.body.velocity.set(0,0,0); secondEl.body.angularVelocity.set(0,0,0);
+                  this.firstTarget.el.body.velocity.set(0,0,0); this.firstTarget.el.body.angularVelocity.set(0,0,0);
               }
 
-              // Apply constraint immediately, no delay
               secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}; collideConnected: false`);
+
+              // Wire the power nodes together!
+              let p1 = this.firstTarget.el.components['power-node'];
+              let p2 = secondEl.components['power-node'];
+              if (p1 && p2) {
+                  p1.connections.push(p2);
+                  p2.connections.push(p1);
+              }
 
               this.firstTarget = null;
             }
           });
+        }
+      });
+      
+      // Arrow controls updated to correct keys
+      AFRAME.registerComponent('arrow-controls', {
+        init: function () {
+          this.keys = {};
+          window.addEventListener('keydown', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) this.keys[e.code] = true;
+          });
+          window.addEventListener('keyup', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) this.keys[e.code] = false;
+          });
+        },
+        tick: function (time, delta) {
+          if (!delta) return;
+          let moveZ = (this.keys['ArrowDown'] ? 1 : 0) - (this.keys['ArrowUp'] ? 1 : 0);
+          let moveX = (this.keys['ArrowRight'] ? 1 : 0) - (this.keys['ArrowLeft'] ? 1 : 0);
+          if (moveX === 0 && moveZ === 0) return;
+          let speed = 0.005 * delta;
+          let angle = this.el.sceneEl.camera.el.getAttribute('rotation').y * Math.PI / 180;
+          let dx = moveX * Math.cos(angle) + moveZ * Math.sin(angle);
+          let dz = -moveX * Math.sin(angle) + moveZ * Math.cos(angle);
+          this.el.object3D.position.x += dx * speed; this.el.object3D.position.z += dz * speed;
         }
       });
     </script>
@@ -196,15 +320,26 @@
       <a-entity id="rig" movement-controls="controls: gamepad" arrow-controls position="0 0 0">
         <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
         
-        <a-entity sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" cube-spawner></a-entity>
+        <a-entity id="left-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" x-menu>
+            
+            <a-entity id="wrist-ui" position="0.1 0.1 0.1" rotation="-45 45 0" visible="false">
+                <a-plane width="0.4" height="0.4" color="#222">
+                    <a-text value="Components (Shoot to Spawn)" position="0 0.15 0.01" align="center" scale="0.3 0.3 0.3"></a-text>
+                    
+                    <a-box class="clickable" menu-btn="type: block" position="-0.1 0.05 0.01" depth="0.02" width="0.08" height="0.08" color="#1E90FF"></a-box>
+                    <a-box class="clickable" menu-btn="type: lever" position="0 0.05 0.01" depth="0.02" width="0.08" height="0.08" color="#FF0000"></a-box>
+                    <a-cylinder class="clickable" menu-btn="type: motor" position="0.1 0.05 0.01" radius="0.04" height="0.08" color="#8A2BE2" rotation="90 0 0"></a-cylinder>
+                    
+                    <a-cone class="clickable" menu-btn="type: fan" position="-0.05 -0.05 0.01" radius-bottom="0.04" radius-top="0.01" height="0.08" color="#CCCCCC" rotation="90 0 0"></a-cone>
+                    <a-box class="clickable" menu-btn="type: relay" position="0.05 -0.05 0.01" depth="0.02" width="0.08" height="0.08" color="#FFFF00"></a-box>
+                </a-plane>
+            </a-entity>
+        </a-entity>
         
-        <a-entity sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable; far: 10; showLine: true" glue-tool></a-entity>
+        <a-entity id="right-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable, .clickable; far: 10; showLine: true" glue-tool interact-tool></a-entity>
       </a-entity>
 
-      <a-box class="grabbable" hoverable grabbable smart-grab dynamic-body 
-             position="0 1 -2" color="#4CC3D9" width="0.4" height="0.4" depth="0.4"></a-box>
-
-      <a-plane static-body rotation="-90 0 0" width="20" height="20" color="#7BC8A4"></a-plane>
+      <a-box static-body position="0 -0.5 0" width="40" height="1" depth="40" color="#444444"></a-box>
       
       <a-sky color="#ECECEC"></a-sky>
       
