@@ -51,15 +51,16 @@
           this.el.addEventListener('grab-start', () => {
             this.isGrabbed = true;
             if (this.el.body) {
-              this.el.body.type = 4;
+              this.el.body.type = 4; // KINEMATIC
               this.el.body.updateMassProperties();
             }
           });
           this.el.addEventListener('grab-end', () => {
             this.isGrabbed = false;
             if (this.el.body) {
-              this.el.body.type = 1;
+              this.el.body.type = 1; // DYNAMIC
               this.el.body.updateMassProperties();
+              // Apply throwing momentum
               this.el.body.velocity.set(this.velocity.x * 1.2, this.velocity.y * 1.2, this.velocity.z * 1.2);
             }
           });
@@ -152,6 +153,10 @@
             } else if (this.firstTarget.el !== hitEl) {
               let secondEl = hitEl;
               
+              if (!this.firstTarget.el.id) {
+                this.firstTarget.el.id = 'glueTarget-' + Date.now();
+              }
+
               let firstWorldPoint = new THREE.Vector3();
               firstWorldPoint.copy(this.firstTarget.localPoint);
               this.firstTarget.el.object3D.localToWorld(firstWorldPoint);
@@ -162,27 +167,21 @@
               
               let translation = new THREE.Vector3().subVectors(firstWorldPoint, secondWorldPoint);
               secondEl.object3D.position.add(translation);
-              
-              let offset = new THREE.Vector3().copy(this.firstTarget.normal)
-                  .applyQuaternion(this.firstTarget.el.object3D.quaternion)
-                  .normalize().multiplyScalar(0.01);
-              secondEl.object3D.position.add(offset);
 
-              if (secondEl.body) {
+              // Update physics body instantly and kill momentum to prevent tearing
+              if (secondEl.body && this.firstTarget.el.body) {
                   let newWorldPos = new THREE.Vector3();
                   secondEl.object3D.getWorldPosition(newWorldPos);
                   secondEl.body.position.copy(newWorldPos);
+                  
                   secondEl.body.velocity.set(0,0,0);
                   secondEl.body.angularVelocity.set(0,0,0);
+                  this.firstTarget.el.body.velocity.set(0,0,0);
+                  this.firstTarget.el.body.angularVelocity.set(0,0,0);
               }
 
-              if (!this.firstTarget.el.id) {
-                this.firstTarget.el.id = 'glueTarget-' + Date.now();
-              }
-
-              setTimeout(() => {
-                secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}; collideConnected: false`);
-              }, 50);
+              // Apply constraint immediately, no delay
+              secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}; collideConnected: false`);
 
               this.firstTarget = null;
             }
