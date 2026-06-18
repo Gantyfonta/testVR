@@ -9,7 +9,6 @@
     <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
     
     <script>
-      // --- SYSTEM: Global Power Grid ---
       AFRAME.registerSystem('power-grid', {
         init: function () {
           this.nodes = [];
@@ -18,10 +17,8 @@
         registerNode: function (node) { this.nodes.push(node); },
         registerRelay: function (relay) { this.relays.push(relay); },
         tick: function () {
-          // 1. Reset all nodes
           this.nodes.forEach(n => n.isPowered = false);
 
-          // 2. Map active network channels from SEND relays
           let activeChannels = {};
           this.relays.forEach(r => {
               if (r.data.mode === 'send' && r.el.components['power-node'].isPowered) {
@@ -29,14 +26,12 @@
               }
           });
 
-          // 3. Find all power sources (ON levers + Active RECV relays)
           let sources = this.nodes.filter(n => {
              if (n.el.components.lever && n.el.components.lever.isOn) return true;
              if (n.el.components.relay && n.el.components.relay.data.mode === 'recv' && activeChannels[n.el.components.relay.data.channel]) return true;
              return false;
           });
 
-          // 4. Flood-fill power through glued connections
           let queue = [...sources];
           while(queue.length > 0) {
               let curr = queue.shift();
@@ -50,17 +45,16 @@
         }
       });
 
-      // --- COMPONENT: Power Node (Attached to every spawned object) ---
       AFRAME.registerComponent('power-node', {
         init: function() {
           this.connections = [];
           this.isPowered = false;
-          this.system = this.el.sceneEl.systems['power-grid'];
+          let scene = document.querySelector('a-scene');
+          this.system = scene.systems['power-grid'];
           this.system.registerNode(this);
         }
       });
 
-      // --- COMPONENTS: Interactive Blocks ---
       AFRAME.registerComponent('lever', {
         init: function() {
           this.isOn = false;
@@ -75,7 +69,7 @@
         tick: function() {
           let pnode = this.el.components['power-node'];
           if (pnode && pnode.isPowered && this.el.body) {
-              let localTorque = new CANNON.Vec3(0, 10, 0); // Spin along Y axis
+              let localTorque = new CANNON.Vec3(0, 10, 0);
               let worldTorque = this.el.body.quaternion.vmult(localTorque);
               this.el.body.applyTorque(worldTorque);
           }
@@ -86,7 +80,7 @@
         tick: function() {
           let pnode = this.el.components['power-node'];
           if (pnode && pnode.isPowered && this.el.body) {
-              let localForce = new CANNON.Vec3(0, 15, 0); // Push along Y axis
+              let localForce = new CANNON.Vec3(0, 15, 0);
               let worldForce = this.el.body.quaternion.vmult(localForce);
               this.el.body.applyForce(worldForce, this.el.body.position);
           }
@@ -96,7 +90,8 @@
       AFRAME.registerComponent('relay', {
         schema: { mode: {default: 'send'}, channel: {default: 1} },
         init: function() {
-          this.system = this.el.sceneEl.systems['power-grid'];
+          let scene = document.querySelector('a-scene');
+          this.system = scene.systems['power-grid'];
           this.system.registerRelay(this);
           
           this.text = document.createElement('a-text');
@@ -123,7 +118,6 @@
         }
       });
 
-      // --- UI & TOOLS ---
       AFRAME.registerComponent('x-menu', {
         init: function() {
           let ui = this.el.querySelector('#wrist-ui');
@@ -137,13 +131,16 @@
       AFRAME.registerComponent('menu-btn', {
         schema: { type: {type: 'string'} },
         init: function() {
-          this.el.addEventListener('click', () => {
+          this.el.addEventListener('mousedown', () => {
             let rh = document.querySelector('#right-hand');
             let pos = new THREE.Vector3();
             rh.object3D.getWorldPosition(pos);
-            pos.y += 0.1; // Spawn slightly above the laser hand
+            pos.y += 0.1; 
             
             let el = document.createElement('a-entity');
+            
+            document.querySelector('a-scene').appendChild(el);
+
             el.setAttribute('class', 'grabbable');
             el.setAttribute('hoverable', '');
             el.setAttribute('grabbable', '');
@@ -172,7 +169,6 @@
                el.setAttribute('geometry', 'primitive: box; width: 0.25; height: 0.25; depth: 0.25');
                el.setAttribute('relay', '');
             }
-            document.querySelector('a-scene').appendChild(el);
           });
         }
       });
@@ -191,7 +187,6 @@
         }
       });
 
-      // --- MODIFIED CORE SYSTEMS ---
       AFRAME.registerComponent('smart-grab', {
         init: function () {
           this.isGrabbed = false;
@@ -275,7 +270,6 @@
 
               secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}; collideConnected: false`);
 
-              // Wire the power nodes together!
               let p1 = this.firstTarget.el.components['power-node'];
               let p2 = secondEl.components['power-node'];
               if (p1 && p2) {
@@ -289,7 +283,6 @@
         }
       });
       
-      // Arrow controls updated to correct keys
       AFRAME.registerComponent('arrow-controls', {
         init: function () {
           this.keys = {};
@@ -321,7 +314,6 @@
         <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
         
         <a-entity id="left-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" x-menu>
-            
             <a-entity id="wrist-ui" position="0.1 0.1 0.1" rotation="-45 45 0" visible="false">
                 <a-plane width="0.4" height="0.4" color="#222">
                     <a-text value="Components (Shoot to Spawn)" position="0 0.15 0.01" align="center" scale="0.3 0.3 0.3"></a-text>
