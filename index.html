@@ -9,6 +9,7 @@
     <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
     
     <script>
+      // Desktop movement mapping
       AFRAME.registerComponent('arrow-controls', {
         init: function () {
           this.keys = {};
@@ -42,6 +43,19 @@
         }
       });
 
+      // Fixes the single-handed grab physics conflict
+      AFRAME.registerComponent('smart-grab', {
+        init: function () {
+          this.el.addEventListener('grab-start', () => {
+            this.el.removeAttribute('dynamic-body');
+          });
+          this.el.addEventListener('grab-end', () => {
+            this.el.setAttribute('dynamic-body', '');
+          });
+        }
+      });
+
+      // Spawns cubes with random colors
       AFRAME.registerComponent('cube-spawner', {
         init: function () {
           this.el.addEventListener('ybuttondown', () => {
@@ -49,8 +63,13 @@
             newCube.setAttribute('class', 'grabbable');
             newCube.setAttribute('hoverable', '');
             newCube.setAttribute('grabbable', '');
+            newCube.setAttribute('smart-grab', '');
             newCube.setAttribute('dynamic-body', '');
-            newCube.setAttribute('color', '#FF9233');
+            
+            let colors = ['#FF4500', '#1E90FF', '#32CD32', '#FFD700', '#8A2BE2', '#FF1493', '#00FFFF'];
+            let randomColor = colors[Math.floor(Math.random() * colors.length)];
+            newCube.setAttribute('color', randomColor);
+            
             newCube.setAttribute('width', '0.4');
             newCube.setAttribute('height', '0.4');
             newCube.setAttribute('depth', '0.4');
@@ -66,6 +85,86 @@
           });
         }
       });
+
+      // Handles the pointing, visual spots, and physics snapping
+      AFRAME.registerComponent('glue-tool', {
+        init: function () {
+          this.firstTarget = null;
+          
+          this.el.addEventListener('abuttondown', () => {
+            let raycaster = this.el.components.raycaster;
+            let intersection = raycaster.getIntersection(this.el);
+            if (!intersection) return;
+
+            let hitEl = intersection.object.el;
+            if (!hitEl.classList.contains('grabbable')) return;
+
+            // Create the visual glue spot (green disc)
+            let glueSpot = document.createElement('a-entity');
+            glueSpot.setAttribute('geometry', 'primitive: cylinder; radius: 0.05; height: 0.01');
+            glueSpot.setAttribute('material', 'color: #00FF00; emissive: #00FF00');
+            
+            // Anchor it to the exact local point on the cube
+            let localPoint = hitEl.object3D.worldToLocal(intersection.point.clone());
+            glueSpot.setAttribute('position', localPoint);
+            
+            // Align it flat against the face normal
+            let normal = intersection.face.normal.clone();
+            let lookAtPos = localPoint.clone().add(normal);
+            glueSpot.object3D.lookAt(lookAtPos);
+            glueSpot.object3D.rotateX(Math.PI / 2); 
+            hitEl.appendChild(glueSpot);
+
+            if (!this.firstTarget) {
+              // Store the first selection
+              this.firstTarget = { 
+                  el: hitEl, 
+                  localPoint: localPoint, 
+                  normal: normal 
+              };
+            } else if (this.firstTarget.el !== hitEl) {
+              // Second selection on a different cube! Time to snap.
+              let secondEl = hitEl;
+              
+              // Temporarily pause physics so we can teleport it safely
+              secondEl.removeAttribute('dynamic-body');
+              
+              // Get fresh world coordinates in case the first cube moved
+              let firstWorldPoint = new THREE.Vector3();
+              firstWorldPoint.copy(this.firstTarget.localPoint);
+              this.firstTarget.el.object3D.localToWorld(firstWorldPoint);
+              
+              let secondWorldPoint = new THREE.Vector3();
+              secondWorldPoint.copy(localPoint);
+              secondEl.object3D.localToWorld(secondWorldPoint);
+              
+              // Calculate the distance to move the second cube
+              let translation = new THREE.Vector3().subVectors(firstWorldPoint, secondWorldPoint);
+              secondEl.object3D.position.add(translation);
+              
+              // Add a tiny offset so the meshes don't clip and explode the physics engine
+              let offset = new THREE.Vector3().copy(this.firstTarget.normal)
+                  .applyQuaternion(this.firstTarget.el.object3D.quaternion)
+                  .normalize().multiplyScalar(0.01);
+              secondEl.object3D.position.add(offset);
+
+              // Ensure the first cube has an ID so the physics constraint can target it
+              if (!this.firstTarget.el.id) {
+                this.firstTarget.el.id = 'glueTarget-' + Date.now();
+              }
+
+              // Re-enable physics and lock them together permanently
+              setTimeout(() => {
+                secondEl.setAttribute('dynamic-body', '');
+                secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}`);
+              }, 50);
+
+              // Clear the target so the user can start a new glue pairing
+              this.firstTarget = null;
+            }
+          });
+        }
+      });
     </script>
   </head>
   <body>
@@ -75,10 +174,11 @@
         <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
         
         <a-entity sphere-collider="objects: .grabbable" super-hands hand-controls="hand: left" cube-spawner></a-entity>
-        <a-entity sphere-collider="objects: .grabbable" super-hands hand-controls="hand: right"></a-entity>
+        
+        <a-entity sphere-collider="objects: .grabbable" super-hands hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable; far: 10; showLine: true" glue-tool></a-entity>
       </a-entity>
 
-      <a-box class="grabbable" hoverable grabbable dynamic-body 
+      <a-box class="grabbable" hoverable grabbable smart-grab dynamic-body 
              position="0 1 -2" color="#4CC3D9" width="0.4" height="0.4" depth="0.4"></a-box>
 
       <a-plane static-body rotation="-90 0 0" width="20" height="20" color="#7BC8A4"></a-plane>
