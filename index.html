@@ -2,12 +2,91 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>VR Sandbox</title>
+    <title>Simple VR Game</title>
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
+    
     <script>
+      AFRAME.registerComponent('arrow-controls', {
+        init: function () {
+          this.keys = {};
+          window.addEventListener('keydown', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+              this.keys[e.code] = true;
+            }
+          });
+          window.addEventListener('keyup', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+              this.keys[e.code] = false;
+            }
+          });
+        },
+        tick: function (time, delta) {
+          if (!delta) return;
+          let moveZ = (this.keys['ArrowDown'] ? 1 : 0) - (this.keys['ArrowUp'] ? 1 : 0);
+          let moveX = (this.keys['ArrowRight'] ? 1 : 0) - (this.keys['ArrowLeft'] ? 1 : 0);
+          
+          if (moveX === 0 && moveZ === 0) return;
+          
+          let speed = 0.005 * delta;
+          let camRotation = this.el.sceneEl.camera.el.getAttribute('rotation');
+          let angle = camRotation.y * Math.PI / 180;
+          
+          let dx = moveX * Math.cos(angle) + moveZ * Math.sin(angle);
+          let dz = -moveX * Math.sin(angle) + moveZ * Math.cos(angle);
+          
+          this.el.object3D.position.x += dx * speed;
+          this.el.object3D.position.z += dz * speed;
+        }
+      });
+
+      AFRAME.registerComponent('smart-grab', {
+        init: function () {
+          this.isGrabbed = false;
+          this.velocity = new THREE.Vector3();
+          this.previousPosition = new THREE.Vector3();
+
+          this.el.addEventListener('grab-start', () => {
+            this.isGrabbed = true;
+            if (this.el.body) {
+              this.el.body.type = 4; // KINEMATIC
+              this.el.body.updateMassProperties();
+            }
+          });
+          this.el.addEventListener('grab-end', () => {
+            this.isGrabbed = false;
+            if (this.el.body) {
+              this.el.body.type = 1; // DYNAMIC
+              this.el.body.updateMassProperties();
+              // Apply throwing momentum
+              this.el.body.velocity.set(this.velocity.x * 1.2, this.velocity.y * 1.2, this.velocity.z * 1.2);
+            }
+          });
+        },
+        tick: function (time, delta) {
+          if (this.isGrabbed && delta) {
+            let currentPosition = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(currentPosition);
+            this.velocity.subVectors(currentPosition, this.previousPosition).multiplyScalar(1000 / delta);
+            this.previousPosition.copy(currentPosition);
+            
+            if (this.el.body) {
+              let worldPos = new THREE.Vector3();
+              let worldQuat = new THREE.Quaternion();
+              this.el.object3D.getWorldPosition(worldPos);
+              this.el.object3D.getWorldQuaternion(worldQuat);
+              this.el.body.position.copy(worldPos);
+              this.el.body.quaternion.copy(worldQuat);
+            }
+          } else if (!this.isGrabbed) {
+            this.el.object3D.getWorldPosition(this.previousPosition);
+          }
+        }
+      });
+
+      // --- NEW: Lever & Motor Logic ---
       AFRAME.registerComponent('lever', {
         init: function() {
           this.isOn = false;
@@ -21,6 +100,7 @@
       AFRAME.registerComponent('motor', {
         tick: function() {
           let powered = false;
+          // Check all glued connections to see if an active lever is attached
           if (this.el.connections) {
             for (let i = 0; i < this.el.connections.length; i++) {
               let c = this.el.connections[i];
@@ -38,30 +118,31 @@
         }
       });
 
-      AFRAME.registerComponent('y-spawner', {
+      // --- NEW: Wrist Menu System ---
+      AFRAME.registerComponent('x-menu', {
         init: function() {
-          this.items = ['block', 'lever', 'motor'];
-          this.currentIndex = 0;
-
-          this.textEl = document.createElement('a-text');
-          this.textEl.setAttribute('value', 'Selected: BLOCK');
-          this.textEl.setAttribute('position', '0 0.1 0');
-          this.textEl.setAttribute('scale', '0.4 0.4 0.4');
-          this.textEl.setAttribute('color', 'black');
-          this.textEl.setAttribute('rotation', '-45 0 0');
-          this.el.appendChild(this.textEl);
-
+          let ui = this.el.querySelector('#wrist-ui');
           this.el.addEventListener('xbuttondown', () => {
-            this.currentIndex = (this.currentIndex + 1) % this.items.length;
-            this.textEl.setAttribute('value', 'Selected: ' + this.items[this.currentIndex].toUpperCase());
+             let isVisible = ui.getAttribute('visible');
+             ui.setAttribute('visible', !isVisible);
           });
+        }
+      });
 
-          this.el.addEventListener('ybuttondown', () => {
+      AFRAME.registerComponent('menu-btn', {
+        schema: { type: {type: 'string'} },
+        init: function() {
+          this.el.addEventListener('mousedown', () => {
+            let rh = document.querySelector('#right-hand');
             let pos = new THREE.Vector3();
-            this.el.object3D.getWorldPosition(pos);
-            pos.y += 0.2;
-
+            rh.object3D.getWorldPosition(pos);
+            pos.y += 0.1; 
+            
             let el = document.createElement('a-entity');
+            
+            // Add to scene first to prevent DOM lifecycle errors
+            document.querySelector('a-scene').appendChild(el);
+
             el.setAttribute('class', 'grabbable');
             el.setAttribute('hoverable', '');
             el.setAttribute('grabbable', '');
@@ -70,7 +151,7 @@
             el.setAttribute('position', pos);
             el.connections = [];
 
-            let t = this.items[this.currentIndex];
+            let t = this.data.type;
             if (t === 'block') {
                el.setAttribute('geometry', 'primitive: box; width: 0.3; height: 0.3; depth: 0.3');
                el.setAttribute('material', 'color: #1E90FF');
@@ -83,8 +164,6 @@
                el.setAttribute('material', 'color: #8A2BE2');
                el.setAttribute('motor', '');
             }
-
-            document.querySelector('a-scene').appendChild(el);
           });
         }
       });
@@ -102,48 +181,19 @@
         }
       });
 
-      AFRAME.registerComponent('smart-grab', {
-        init: function () {
-          this.isGrabbed = false;
-          this.velocity = new THREE.Vector3();
-          this.previousPosition = new THREE.Vector3();
-          this.el.addEventListener('grab-start', () => {
-            this.isGrabbed = true;
-            if (this.el.body) { this.el.body.type = 4; this.el.body.updateMassProperties(); }
-          });
-          this.el.addEventListener('grab-end', () => {
-            this.isGrabbed = false;
-            if (this.el.body) {
-              this.el.body.type = 1; this.el.body.updateMassProperties();
-              this.el.body.velocity.set(this.velocity.x * 1.2, this.velocity.y * 1.2, this.velocity.z * 1.2);
-            }
-          });
-        },
-        tick: function (time, delta) {
-          if (this.isGrabbed && delta) {
-            let currentPosition = new THREE.Vector3();
-            this.el.object3D.getWorldPosition(currentPosition);
-            this.velocity.subVectors(currentPosition, this.previousPosition).multiplyScalar(1000 / delta);
-            this.previousPosition.copy(currentPosition);
-            if (this.el.body) {
-              let worldPos = new THREE.Vector3(); let worldQuat = new THREE.Quaternion();
-              this.el.object3D.getWorldPosition(worldPos); this.el.object3D.getWorldQuaternion(worldQuat);
-              this.el.body.position.copy(worldPos); this.el.body.quaternion.copy(worldQuat);
-            }
-          } else if (!this.isGrabbed) { this.el.object3D.getWorldPosition(this.previousPosition); }
-        }
-      });
-
       AFRAME.registerComponent('glue-tool', {
         init: function () {
           this.firstTarget = null;
+          
           this.el.addEventListener('abuttondown', () => {
             let raycaster = this.el.components.raycaster;
             let intersections = raycaster.intersections;
+
             if (!intersections || intersections.length === 0) return;
 
             let intersection = intersections[0];
             let hitEl = intersection.object.el;
+
             if (!hitEl || !hitEl.classList.contains('grabbable')) return;
 
             let glueSpot = document.createElement('a-entity');
@@ -155,14 +205,22 @@
             
             let normal = intersection.face.normal.clone();
             let lookAtPos = localPoint.clone().add(normal);
-            glueSpot.object3D.lookAt(lookAtPos); glueSpot.object3D.rotateX(Math.PI / 2); 
+            glueSpot.object3D.lookAt(lookAtPos);
+            glueSpot.object3D.rotateX(Math.PI / 2); 
             hitEl.appendChild(glueSpot);
 
             if (!this.firstTarget) {
-              this.firstTarget = { el: hitEl, localPoint: localPoint, normal: normal };
+              this.firstTarget = { 
+                  el: hitEl, 
+                  localPoint: localPoint, 
+                  normal: normal 
+              };
             } else if (this.firstTarget.el !== hitEl) {
               let secondEl = hitEl;
-              if (!this.firstTarget.el.id) this.firstTarget.el.id = 'glueTarget-' + Date.now();
+              
+              if (!this.firstTarget.el.id) {
+                this.firstTarget.el.id = 'glueTarget-' + Date.now();
+              }
 
               let firstWorldPoint = new THREE.Vector3();
               firstWorldPoint.copy(this.firstTarget.localPoint);
@@ -175,16 +233,22 @@
               let translation = new THREE.Vector3().subVectors(firstWorldPoint, secondWorldPoint);
               secondEl.object3D.position.add(translation);
 
+              // Update physics body instantly and kill momentum to prevent tearing
               if (secondEl.body && this.firstTarget.el.body) {
                   let newWorldPos = new THREE.Vector3();
                   secondEl.object3D.getWorldPosition(newWorldPos);
                   secondEl.body.position.copy(newWorldPos);
-                  secondEl.body.velocity.set(0,0,0); secondEl.body.angularVelocity.set(0,0,0);
-                  this.firstTarget.el.body.velocity.set(0,0,0); this.firstTarget.el.body.angularVelocity.set(0,0,0);
+                  
+                  secondEl.body.velocity.set(0,0,0);
+                  secondEl.body.angularVelocity.set(0,0,0);
+                  this.firstTarget.el.body.velocity.set(0,0,0);
+                  this.firstTarget.el.body.angularVelocity.set(0,0,0);
               }
 
+              // Apply constraint immediately, no delay
               secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}; collideConnected: false`);
 
+              // Wire them together for the Motor/Lever connection checks
               if (!this.firstTarget.el.connections) this.firstTarget.el.connections = [];
               if (!secondEl.connections) secondEl.connections = [];
               this.firstTarget.el.connections.push(secondEl);
@@ -195,44 +259,35 @@
           });
         }
       });
-      
-      AFRAME.registerComponent('arrow-controls', {
-        init: function () {
-          this.keys = {};
-          window.addEventListener('keydown', (e) => {
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) this.keys[e.code] = true;
-          });
-          window.addEventListener('keyup', (e) => {
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) this.keys[e.code] = false;
-          });
-        },
-        tick: function (time, delta) {
-          if (!delta) return;
-          let moveZ = (this.keys['ArrowDown'] ? 1 : 0) - (this.keys['ArrowUp'] ? 1 : 0);
-          let moveX = (this.keys['ArrowRight'] ? 1 : 0) - (this.keys['ArrowLeft'] ? 1 : 0);
-          if (moveX === 0 && moveZ === 0) return;
-          let speed = 0.005 * delta;
-          let angle = this.el.sceneEl.camera.el.getAttribute('rotation').y * Math.PI / 180;
-          let dx = moveX * Math.cos(angle) + moveZ * Math.sin(angle);
-          let dz = -moveX * Math.sin(angle) + moveZ * Math.cos(angle);
-          this.el.object3D.position.x += dx * speed; this.el.object3D.position.z += dz * speed;
-        }
-      });
     </script>
   </head>
   <body>
     <a-scene physics="gravity: -9.8">
+      
       <a-entity id="rig" movement-controls="controls: gamepad" arrow-controls position="0 0 0">
         <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
         
-        <a-entity id="left-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" y-spawner></a-entity>
+        <a-entity sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" x-menu>
+            <a-entity id="wrist-ui" position="0.1 0.1 0.1" rotation="-45 45 0" visible="false">
+                <a-plane width="0.3" height="0.3" color="#222">
+                    <a-text value="Shoot to Spawn" position="0 0.1 0.01" align="center" scale="0.3 0.3 0.3"></a-text>
+                    <a-box class="clickable" menu-btn="type: block" position="-0.08 0 0.01" depth="0.02" width="0.06" height="0.06" color="#1E90FF"></a-box>
+                    <a-box class="clickable" menu-btn="type: lever" position="0 0 0.01" depth="0.02" width="0.06" height="0.06" color="#FF0000"></a-box>
+                    <a-cylinder class="clickable" menu-btn="type: motor" position="0.08 0 0.01" radius="0.03" height="0.06" color="#8A2BE2" rotation="90 0 0"></a-cylinder>
+                </a-plane>
+            </a-entity>
+        </a-entity>
         
-        <a-entity id="right-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable; far: 10; showLine: true" glue-tool interact-tool></a-entity>
+        <a-entity id="right-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable, .clickable; far: 10; showLine: true" glue-tool interact-tool></a-entity>
       </a-entity>
 
-      <a-plane static-body position="0 0 0" rotation="-90 0 0" width="40" height="40" color="#444444"></a-plane>
+      <a-box class="grabbable" hoverable grabbable smart-grab dynamic-body 
+             position="0 1 -2" color="#4CC3D9" width="0.4" height="0.4" depth="0.4"></a-box>
+
+      <a-plane static-body rotation="-90 0 0" width="20" height="20" color="#7BC8A4"></a-plane>
       
       <a-sky color="#ECECEC"></a-sky>
+      
     </a-scene>
   </body>
 </html>
