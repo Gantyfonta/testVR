@@ -9,6 +9,7 @@
     <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
     
     <script>
+      // Uses Arrow Keys instead of WASD
       AFRAME.registerComponent('arrow-controls', {
         init: function () {
           this.keys = {};
@@ -86,7 +87,6 @@
         }
       });
 
-      // --- NEW: Lever & Motor Logic ---
       AFRAME.registerComponent('lever', {
         init: function() {
           this.isOn = false;
@@ -100,7 +100,6 @@
       AFRAME.registerComponent('motor', {
         tick: function() {
           let powered = false;
-          // Check all glued connections to see if an active lever is attached
           if (this.el.connections) {
             for (let i = 0; i < this.el.connections.length; i++) {
               let c = this.el.connections[i];
@@ -118,7 +117,6 @@
         }
       });
 
-      // --- NEW: Wrist Menu System ---
       AFRAME.registerComponent('x-menu', {
         init: function() {
           let ui = this.el.querySelector('#wrist-ui');
@@ -129,18 +127,29 @@
         }
       });
 
+      // --- UPDATED: Touch-Based Spawner ---
       AFRAME.registerComponent('menu-btn', {
         schema: { type: {type: 'string'} },
         init: function() {
-          this.el.addEventListener('mousedown', () => {
+          this.el.setAttribute('hoverable', ''); // Allows the sphere-collider to interact with it
+          this.isSpawning = false;
+
+          this.el.addEventListener('hover-start', (evt) => {
+            // Prevent rapid-fire spawning
+            if (this.isSpawning) return;
+            
+            // Only spawn if touched by the right hand
+            if (evt.detail.hand && evt.detail.hand.id !== 'right-hand') return;
+
+            this.isSpawning = true;
+            setTimeout(() => { this.isSpawning = false; }, 500); // 0.5 second cooldown
+
             let rh = document.querySelector('#right-hand');
             let pos = new THREE.Vector3();
             rh.object3D.getWorldPosition(pos);
-            pos.y += 0.1; 
+            pos.y += 0.15; // Spawn slightly above the right hand
             
             let el = document.createElement('a-entity');
-            
-            // Add to scene first to prevent DOM lifecycle errors
             document.querySelector('a-scene').appendChild(el);
 
             el.setAttribute('class', 'grabbable');
@@ -233,7 +242,6 @@
               let translation = new THREE.Vector3().subVectors(firstWorldPoint, secondWorldPoint);
               secondEl.object3D.position.add(translation);
 
-              // Update physics body instantly and kill momentum to prevent tearing
               if (secondEl.body && this.firstTarget.el.body) {
                   let newWorldPos = new THREE.Vector3();
                   secondEl.object3D.getWorldPosition(newWorldPos);
@@ -245,10 +253,8 @@
                   this.firstTarget.el.body.angularVelocity.set(0,0,0);
               }
 
-              // Apply constraint immediately, no delay
               secondEl.setAttribute('constraint', `type: lock; target: #${this.firstTarget.el.id}; collideConnected: false`);
 
-              // Wire them together for the Motor/Lever connection checks
               if (!this.firstTarget.el.connections) this.firstTarget.el.connections = [];
               if (!secondEl.connections) secondEl.connections = [];
               this.firstTarget.el.connections.push(secondEl);
@@ -267,10 +273,10 @@
       <a-entity id="rig" movement-controls="controls: gamepad" arrow-controls position="0 0 0">
         <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
         
-        <a-entity sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" x-menu>
+        <a-entity id="left-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: left" x-menu>
             <a-entity id="wrist-ui" position="0.1 0.1 0.1" rotation="-45 45 0" visible="false">
                 <a-plane width="0.3" height="0.3" color="#222">
-                    <a-text value="Shoot to Spawn" position="0 0.1 0.01" align="center" scale="0.3 0.3 0.3"></a-text>
+                    <a-text value="Touch to Spawn" position="0 0.1 0.01" align="center" scale="0.3 0.3 0.3"></a-text>
                     <a-box class="clickable" menu-btn="type: block" position="-0.08 0 0.01" depth="0.02" width="0.06" height="0.06" color="#1E90FF"></a-box>
                     <a-box class="clickable" menu-btn="type: lever" position="0 0 0.01" depth="0.02" width="0.06" height="0.06" color="#FF0000"></a-box>
                     <a-cylinder class="clickable" menu-btn="type: motor" position="0.08 0 0.01" radius="0.03" height="0.06" color="#8A2BE2" rotation="90 0 0"></a-cylinder>
@@ -278,7 +284,7 @@
             </a-entity>
         </a-entity>
         
-        <a-entity id="right-hand" sphere-collider="objects: .grabbable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable, .clickable; far: 10; showLine: true" glue-tool interact-tool></a-entity>
+        <a-entity id="right-hand" sphere-collider="objects: .grabbable, .clickable" super-hands="grabStartButtons: triggerdown; grabEndButtons: triggerup" hand-controls="hand: right" laser-controls="hand: right" raycaster="objects: .grabbable; far: 10; showLine: true" glue-tool interact-tool></a-entity>
       </a-entity>
 
       <a-box class="grabbable" hoverable grabbable smart-grab dynamic-body 
